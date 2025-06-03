@@ -5,6 +5,61 @@ import (
 	"math"
 )
 
+// Helper functions for matrix operations
+
+// sliceCols extracts a new matrix by slicing specified columns from an existing matrix.
+func sliceCols(m *Matrix, startCol, endCol int) (*Matrix, error) {
+	if m == nil {
+		return nil, fmt.Errorf("input matrix cannot be nil")
+	}
+	if startCol < 0 || endCol <= startCol || endCol > m.Cols {
+		return nil, fmt.Errorf("invalid column slice indices: start %d, end %d for matrix with %d cols", startCol, endCol, m.Cols)
+	}
+	numSlicedCols := endCol - startCol
+	sliced, err := NewMatrix(m.Rows, numSlicedCols)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new matrix for slice: %v", err)
+	}
+	for i := 0; i < m.Rows; i++ {
+		for j := 0; j < numSlicedCols; j++ {
+			sliced.Data[i][j] = m.Data[i][startCol+j]
+		}
+	}
+	return sliced, nil
+}
+
+// concatenateCols concatenates a list of matrices column-wise.
+// All matrices must have the same number of rows.
+func concatenateCols(matrices []*Matrix) (*Matrix, error) {
+	if len(matrices) == 0 {
+		return nil, fmt.Errorf("cannot concatenate empty list of matrices")
+	}
+	numRows := matrices[0].Rows
+	totalCols := 0
+	for _, m := range matrices {
+		if m.Rows != numRows {
+			return nil, fmt.Errorf("matrices must have the same number of rows to concatenate column-wise")
+		}
+		totalCols += m.Cols
+	}
+
+	concatenated, err := NewMatrix(numRows, totalCols)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new matrix for concatenation: %v", err)
+	}
+
+	currentStartCol := 0
+	for _, m := range matrices {
+		for i := 0; i < m.Rows; i++ {
+			for j := 0; j < m.Cols; j++ {
+				concatenated.Data[i][currentStartCol+j] = m.Data[i][j]
+			}
+		}
+		currentStartCol += m.Cols
+	}
+	return concatenated, nil
+}
+
 // AttentionType represents the type of attention mechanism to use
 type AttentionType int
 
@@ -221,85 +276,86 @@ func (mha *MultiHeadAttention) Forward(query, key, value *Matrix, mask *Attentio
 	if query == nil || key == nil || value == nil {
 		return nil, fmt.Errorf("query, key, and value matrices cannot be nil")
 	}
-	
-	if query.Cols != mha.ModelDim || key.Cols != mha.ModelDim || value.Cols != mha.ModelDim {
-		return nil, fmt.Errorf("input dimensions don't match model dimension (%d): query(%d), key(%d), value(%d)",
-			mha.ModelDim, query.Cols, key.Cols, value.Cols)
-	}
-	
-	// Project inputs to query, key, value
-	q, err := MatMul(query, mha.QueryWeight)
-	if err != nil {
-		return nil, fmt.Errorf("failed to project query: %v", err)
-	}
-	
-	k, err := MatMul(key, mha.KeyWeight)
-	if err != nil {
-		return nil, fmt.Errorf("failed to project key: %v", err)
-	}
-	
-	v, err := MatMul(value, mha.ValueWeight)
-	if err != nil {
-		return nil, fmt.Errorf("failed to project value: %v", err)
-	}
-	
-	// In a full implementation, we would reshape to separate the heads here
-	// For simplicity in this implementation, we're treating all heads as one
-	
-	// Compute attention scores
-	kT, err := Transpose(k)
-	if err != nil {
-		return nil, fmt.Errorf("failed to transpose key: %v", err)
-	}
-	
-	scores, err := MatMul(q, kT)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute attention scores: %v", err)
-	}
-	
-	// Scale scores
-	scaleFactor := math.Sqrt(float64(mha.HeadDim))
-	scaledScores, err := ScalarMultiply(scores, 1.0/scaleFactor)
-	if err != nil {
-		return nil, fmt.Errorf("failed to scale attention scores: %v", err)
-	}
-	
-	// Apply mask if provided and if using masked attention
-	if mask != nil && mha.AttentionType == MaskedAttention {
-		maskedScores, err := mask.ApplyMask(scaledScores)
-		if err != nil {
-			return nil, fmt.Errorf("failed to apply attention mask: %v", err)
+	seqLen := query.Rows // Assuming query, key, value have same seq_len (num rows)
+
+	// 1. Initial linear projections
+	qFull, err := MatMul(query, mha.QueryWeight)
+	if err != nil { return nil, fmt.Errorf("query projection failed: %v", err) }
+	kFull, err := MatMul(key, mha.KeyWeight)
+	if err != nil { return nil, fmt.Errorf("key projection failed: %v", err) }
+	vFull, err := MatMul(value, mha.ValueWeight)
+	if err != nil { return nil, fmt.Errorf("value projection failed: %v", err) }
+
+	headOutputs := make([]*Matrix, 0, mha.NumHeads)
+
+	// 2. Process each head
+	for h := 0; h < mha.NumHeads; h++ {
+		startCol := h * mha.HeadDim
+		endCol := (h + 1) * mha.HeadDim
+
+		qHead, err := sliceCols(qFull, startCol, endCol)
+		if err != nil { return nil, fmt.Errorf("slicing qFull for head %d failed: %v", h, err) }
+		kHead, err := sliceCols(kFull, startCol, endCol)
+		if err != nil { return nil, fmt.Errorf("slicing kFull for head %d failed: %v", h, err) }
+		vHead, err := sliceCols(vFull, startCol, endCol)
+		if err != nil { return nil, fmt.Errorf("slicing vFull for head %d failed: %v", h, err) }
+
+		// Scaled Dot-Product Attention for the current head
+		kHeadT, err := Transpose(kHead)
+		if err != nil { return nil, fmt.Errorf("transpose kHead for head %d failed: %v", h, err) }
+
+		scores, err := MatMul(qHead, kHeadT)
+		if err != nil { return nil, fmt.Errorf("matmul qHead*kHeadT for head %d failed: %v", h, err) }
+
+		scaledScores, err := ScalarMultiply(scores, 1.0/math.Sqrt(float64(mha.HeadDim)))
+		if err != nil { return nil, fmt.Errorf("scaling scores for head %d failed: %v", h, err) }
+
+		if mask != nil && mha.AttentionType == MaskedAttention {
+			// Ensure mask is (seqLen, seqLen)
+			if mask.Mask.Rows != seqLen || mask.Mask.Cols != seqLen {
+				return nil, fmt.Errorf("attention mask dimensions (%dx%d) incompatible with sequence length %d for head %d", mask.Mask.Rows, mask.Mask.Cols, seqLen, h)
+			}
+			scaledScores, err = mask.ApplyMask(scaledScores)
+			if err != nil { return nil, fmt.Errorf("applying mask for head %d failed: %v", h, err) }
 		}
-		scaledScores = maskedScores
-	}
-	
-	// Apply softmax
-	attentionWeights, err := Softmax(scaledScores)
-	if err != nil {
-		return nil, fmt.Errorf("failed to apply softmax: %v", err)
-	}
-	
-	// Apply dropout to attention weights if training and dropout is configured
-	if isTraining && mha.DropoutRate > 0 {
-		attentionWeights = mha.AttentionDropout.Forward(attentionWeights, true)
-		if attentionWeights == nil {
-			return nil, fmt.Errorf("dropout operation failed")
+
+		attentionWeights, err := Softmax(scaledScores)
+		if err != nil { return nil, fmt.Errorf("softmax for head %d failed: %v", h, err) }
+
+		if isTraining && mha.DropoutRate > 0 {
+			attentionWeights = mha.AttentionDropout.Forward(attentionWeights, true) // Forward method of Dropout doesn't return error
+			if attentionWeights == nil { // Check if dropout failed (though current dropout doesn't indicate failure this way)
+				return nil, fmt.Errorf("dropout on attention weights failed for head %d", h)
+			}
 		}
+
+		weightedValue, err := MatMul(attentionWeights, vHead)
+		if err != nil { return nil, fmt.Errorf("matmul attentionWeights*vHead for head %d failed: %v", h, err) }
+
+		headOutputs = append(headOutputs, weightedValue)
 	}
-	
-	// Apply attention weights to values
-	weightedValues, err := MatMul(attentionWeights, v)
-	if err != nil {
-		return nil, fmt.Errorf("failed to apply attention weights: %v", err)
+
+	// 3. Concatenate head outputs
+	var concatenatedOutput *Matrix
+	if len(headOutputs) == 1 { // Optimization for single head
+		 concatenatedOutput = headOutputs[0]
+	} else {
+		 concatenatedOutput, err = concatenateCols(headOutputs)
+		 if err != nil { return nil, fmt.Errorf("concatenating head outputs failed: %v", err) }
 	}
-	
-	// Project back to model dimension
-	output, err := MatMul(weightedValues, mha.OutputWeight)
-	if err != nil {
-		return nil, fmt.Errorf("failed to project output: %v", err)
+	// Check if concatenatedOutput has the expected model_dim columns
+	if concatenatedOutput.Cols != mha.ModelDim {
+		 // This might happen if HeadDim * NumHeads != ModelDim, but constructor already checks ModelDim % NumHeads == 0.
+		 // More likely an issue if concatenateCols has a bug or if headOutputs is empty.
+		 return nil, fmt.Errorf("concatenated output has %d columns, expected model_dim %d", concatenatedOutput.Cols, mha.ModelDim)
 	}
-	
-	return output, nil
+
+
+	// 4. Final linear projection
+	finalOutput, err := MatMul(concatenatedOutput, mha.OutputWeight)
+	if err != nil { return nil, fmt.Errorf("final output projection failed: %v", err) }
+
+	return finalOutput, nil
 }
 
 // ForwardLegacy provides backward compatibility with the original API

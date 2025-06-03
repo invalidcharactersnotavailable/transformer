@@ -41,6 +41,65 @@ func MustNewMatrix(rows, cols int) *Matrix {
 	return m
 }
 
+// sliceCols extracts a new matrix by slicing specified columns from an existing matrix.
+func sliceCols(m *Matrix, startCol, endCol int) (*Matrix, error) {
+	if m == nil {
+		return nil, fmt.Errorf("input matrix cannot be nil")
+	}
+	if startCol < 0 || endCol <= startCol || endCol > m.Cols {
+		return nil, fmt.Errorf("invalid column slice indices: start %d, end %d for matrix with %d cols", startCol, endCol, m.Cols)
+	}
+	numSlicedCols := endCol - startCol
+	sliced, err := NewMatrix(m.Rows, numSlicedCols) // Uses autodiff.NewMatrix
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new matrix for slice: %v", err)
+	}
+	for i := 0; i < m.Rows; i++ {
+		for j := 0; j < numSlicedCols; j++ {
+			sliced.Data[i][j] = m.Data[i][startCol+j]
+		}
+	}
+	return sliced, nil
+}
+
+// concatenateCols concatenates a list of matrices column-wise.
+// All matrices must have the same number of rows.
+func concatenateCols(matrices []*Matrix) (*Matrix, error) { // Renamed from concatenateColsMatrix for consistency
+	if len(matrices) == 0 {
+		return nil, fmt.Errorf("cannot concatenate empty list of matrices")
+	}
+	if matrices[0] == nil {
+		return nil, fmt.Errorf("first matrix in list cannot be nil")
+	}
+	numRows := matrices[0].Rows
+	totalCols := 0
+	for _, m := range matrices {
+		if m == nil {
+			return nil, fmt.Errorf("nil matrix found in list to concatenate")
+		}
+		if m.Rows != numRows {
+			return nil, fmt.Errorf("matrices must have the same number of rows (%d vs %d) to concatenate column-wise", m.Rows, numRows)
+		}
+		totalCols += m.Cols
+	}
+
+	concatenated, err := NewMatrix(numRows, totalCols) // Uses autodiff.NewMatrix
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new matrix for concatenation: %v", err)
+	}
+
+	currentStartCol := 0
+	for _, m := range matrices {
+		for i := 0; i < m.Rows; i++ {
+			for j := 0; j < m.Cols; j++ {
+				concatenated.Data[i][currentStartCol+j] = m.Data[i][j]
+			}
+		}
+		currentStartCol += m.Cols
+	}
+	return concatenated, nil
+}
+
 // NewRandomMatrix creates a new matrix with random values
 func NewRandomMatrix(rows, cols int) (*Matrix, error) {
 	m, err := NewMatrix(rows, cols)

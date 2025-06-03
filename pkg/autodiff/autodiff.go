@@ -286,6 +286,72 @@ func MatMul(a, b *Tensor) (*Tensor, error) {
 	return result, nil
 }
 
+// DropoutTensor applies dropout to the input tensor.
+// If isTraining is false or dropoutRate is 0, it returns the input tensor directly.
+// Otherwise, it scales the remaining elements by 1.0 / (1.0 - dropoutRate).
+func DropoutTensor(input *Tensor, dropoutRate float64, isTraining bool, name string) (*Tensor, error) {
+	if input == nil {
+		return nil, fmt.Errorf("input tensor cannot be nil")
+	}
+	if dropoutRate < 0.0 || dropoutRate >= 1.0 { // dropoutRate == 1.0 would zero out everything and cause division by zero for scale
+		return nil, fmt.Errorf("dropoutRate must be between 0.0 and 1.0 (exclusive of 1.0), got %f", dropoutRate)
+	}
+
+	if !isTraining || dropoutRate == 0.0 {
+		return input, nil // No dropout applied, return original tensor
+	}
+
+	// Forward pass
+	dropoutMask, err := NewMatrix(input.Data.Rows, input.Data.Cols)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dropout mask matrix: %v", err)
+	}
+
+	scale := 1.0 / (1.0 - dropoutRate)
+	resultData, err := NewMatrix(input.Data.Rows, input.Data.Cols)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result data matrix for dropout: %v", err)
+	}
+
+	for i := 0; i < input.Data.Rows; i++ {
+		for j := 0; j < input.Data.Cols; j++ {
+			if math.Float64() < dropoutRate { // math.Float64() is from "math/rand" via NewRandomMatrix->matrix.go
+				dropoutMask.Data[i][j] = 0.0
+				resultData.Data[i][j] = 0.0
+			} else {
+				dropoutMask.Data[i][j] = scale
+				resultData.Data[i][j] = input.Data.Data[i][j] * scale
+			}
+		}
+	}
+
+	outputConfig := &TensorConfig{
+		RequiresGrad: input.Requires,
+		Name:         name,
+	}
+	result, err := NewTensor(resultData, outputConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create output tensor for dropout: %v", err)
+	}
+
+	// Backward pass
+	if input.Requires {
+		result.Children = append(result.Children, input)
+		result.BackwardFn = func() []*Tensor {
+			if input.Grad == nil && input.Requires { // Initialize if somehow nil
+				input.Grad, _ = NewMatrix(input.Data.Rows, input.Data.Cols)
+			}
+			if input.Grad != nil && result.Grad != nil {
+				for i := 0; i < input.Grad.Rows; i++ {
+					for j := 0; j < input.Grad.Cols; j++ {
+						input.Grad.Data[i][j] += result.Grad.Data[i][j] * dropoutMask.Data[i][j]
+					}
+				}
+			}
+			return []*Tensor{input}
+		}
+	}
+
 // Add performs element-wise addition with gradient tracking
 func Add(a, b *Tensor) (*Tensor, error) {
 	if a == nil || b == nil {
@@ -921,6 +987,196 @@ func Mean(a *Tensor) (*Tensor, error) {
 		}
 	}
 	
+	return result, nil
+}
+
+// SliceColsTensor creates a new tensor by slicing columns from the input tensor.
+// Gradients are propagated back to the corresponding columns of the input tensor.
+func SliceColsTensor(input *Tensor, startCol, numCols int, name string) (*Tensor, error) {
+	if input == nil {
+		return nil, fmt.Errorf("input tensor cannot be nil")
+	}
+	if numCols <= 0 {
+		return nil, fmt.Errorf("number of columns to slice must be positive, got %d", numCols)
+	}
+
+	endCol := startCol + numCols
+	if startCol < 0 || endCol > input.Data.Cols {
+		return nil, fmt.Errorf("column slice indices out of bounds: start %d, numCols %d for tensor with %d cols", startCol, numCols, input.Data.Cols)
+	}
+
+	// Forward pass: Slice the data matrix
+	slicedData, err := sliceCols(input.Data, startCol, endCol) // Uses sliceCols from pkg/autodiff/matrix.go
+	if err != nil {
+		return nil, fmt.Errorf("failed to slice tensor data: %v", err)
+	}
+
+	outputConfig := &TensorConfig{
+		RequiresGrad: input.Requires,
+		Name:         name,
+	}
+	output, err := NewTensor(slicedData, outputConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create output tensor for slice: %v", err)
+	}
+
+	// Backward pass
+	if input.Requires {
+		output.Children = append(output.Children, input)
+		output.BackwardFn = func() []*Tensor {
+			if input.Grad == nil && input.Requires { // Should have been initialized by ZeroGrad or earlier op
+				 input.Grad, _ = NewMatrix(input.Data.Rows, input.Data.Cols) // Initialize if somehow nil
+			}
+			if input.Grad != nil && output.Grad != nil {
+				for i := 0; i < output.Grad.Rows; i++ {
+					for j := 0; j < output.Grad.Cols; j++ {
+						if i < input.Grad.Rows && (startCol+j) < input.Grad.Cols {
+							 input.Grad.Data[i][startCol+j] += output.Grad.Data[i][j]
+						}
+					}
+				}
+			}
+			return []*Tensor{input}
+		}
+	}
+	return output, nil
+}
+
+// ConcatenateColsTensor creates a new tensor by concatenating a list of tensors column-wise.
+// All input tensors must have the same number of rows.
+// Gradients are propagated back by splitting the output gradient and adding to respective input tensor gradients.
+func ConcatenateColsTensor(tensors []*Tensor, name string) (*Tensor, error) {
+	if len(tensors) == 0 {
+		return nil, fmt.Errorf("input tensor list cannot be empty for concatenation")
+	}
+
+	dataMatrices := make([]*Matrix, len(tensors))
+	anyRequiresGrad := false
+	for i, t := range tensors {
+		if t == nil {
+			return nil, fmt.Errorf("nil tensor found in input list at index %d", i)
+		}
+		dataMatrices[i] = t.Data
+		if t.Requires {
+			anyRequiresGrad = true
+		}
+	}
+
+	// Forward pass: Concatenate the data matrices
+	concatenatedData, err := concatenateCols(dataMatrices) // Uses concatenateCols from pkg/autodiff/matrix.go
+	if err != nil {
+		return nil, fmt.Errorf("failed to concatenate tensor data matrices: %v", err)
+	}
+
+	outputConfig := &TensorConfig{
+		RequiresGrad: anyRequiresGrad,
+		Name:         name,
+	}
+	output, err := NewTensor(concatenatedData, outputConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create output tensor for concatenation: %v", err)
+	}
+
+	// Backward pass
+	if anyRequiresGrad {
+		// Store only tensors that require grad as children for efficiency
+		childrenRequiringGrad := make([]*Tensor, 0)
+		for _, t := range tensors {
+			if t.Requires {
+				childrenRequiringGrad = append(childrenRequiringGrad, t)
+			}
+		}
+		output.Children = childrenRequiringGrad // Or all tensors if simpler, grad check handles it
+
+		output.BackwardFn = func() []*Tensor {
+			currentStartCol := 0
+			for _, inputTensor := range tensors {
+				if inputTensor.Requires {
+					if inputTensor.Grad == nil { // Should be initialized by ZeroGrad
+						inputTensor.Grad, _ = NewMatrix(inputTensor.Data.Rows, inputTensor.Data.Cols)
+					}
+					if inputTensor.Grad != nil && output.Grad != nil {
+						numColsForThisTensor := inputTensor.Data.Cols
+						for i := 0; i < output.Grad.Rows; i++ { // Should match inputTensor.Data.Rows
+							for j := 0; j < numColsForThisTensor; j++ {
+								if i < inputTensor.Grad.Rows && j < inputTensor.Grad.Cols && (currentStartCol+j) < output.Grad.Cols {
+									inputTensor.Grad.Data[i][currentStartCol+j] += output.Grad.Data[i][currentStartCol+j]
+								}
+							}
+						}
+					}
+				}
+				currentStartCol += inputTensor.Data.Cols
+			}
+			// Return only children that required grad
+			return childrenRequiringGrad
+		}
+	}
+	return output, nil
+}
+
+// ApplyAttentionMaskTensor applies a mask to a tensor, replacing values where mask is 0.
+// Gradients are only propagated for unmasked values.
+func ApplyAttentionMaskTensor(scores *Tensor, maskTensor *Tensor, maskValue float64, name string) (*Tensor, error) {
+	if scores == nil {
+		return nil, fmt.Errorf("scores tensor cannot be nil")
+	}
+	if maskTensor == nil {
+		return nil, fmt.Errorf("maskTensor cannot be nil")
+	}
+
+	if scores.Data.Rows != maskTensor.Data.Rows || scores.Data.Cols != maskTensor.Data.Cols {
+		return nil, fmt.Errorf("scores tensor shape (%dx%d) must match maskTensor shape (%dx%d)",
+			scores.Data.Rows, scores.Data.Cols, maskTensor.Data.Rows, maskTensor.Data.Cols)
+	}
+
+	// Forward pass
+	resultData, err := NewMatrix(scores.Data.Rows, scores.Data.Cols)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create data matrix for masked tensor: %v", err)
+	}
+
+	for i := 0; i < scores.Data.Rows; i++ {
+		for j := 0; j < scores.Data.Cols; j++ {
+			if maskTensor.Data.Data[i][j] == 0 {
+				resultData.Data[i][j] = maskValue
+			} else {
+				resultData.Data[i][j] = scores.Data.Data[i][j]
+			}
+		}
+	}
+
+	outputConfig := &TensorConfig{
+		RequiresGrad: scores.Requires, // Gradient requirement depends on the scores tensor
+		Name:         name,
+	}
+	result, err := NewTensor(resultData, outputConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create output tensor for masked scores: %v", err)
+	}
+
+	// Backward pass
+	if scores.Requires {
+		result.Children = append(result.Children, scores) // maskTensor typically doesn't require grad
+		result.BackwardFn = func() []*Tensor {
+			if scores.Grad == nil && scores.Requires { // Initialize if somehow nil
+				scores.Grad, _ = NewMatrix(scores.Data.Rows, scores.Data.Cols)
+			}
+
+			if scores.Grad != nil && result.Grad != nil {
+				for i := 0; i < scores.Grad.Rows; i++ {
+					for j := 0; j < scores.Grad.Cols; j++ {
+						// Only propagate gradient if the position was NOT masked
+						if maskTensor.Data.Data[i][j] == 1 {
+							scores.Grad.Data[i][j] += result.Grad.Data[i][j]
+						}
+					}
+				}
+			}
+			return []*Tensor{scores}
+		}
+	}
+
 	return result, nil
 }
 

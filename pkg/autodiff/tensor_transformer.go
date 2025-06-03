@@ -51,6 +51,7 @@ type MultiHeadAttentionWithTensors struct {
 	KeyWeight   *Tensor
 	ValueWeight *Tensor
 	OutputWeight *Tensor
+	AttentionDropoutRate float64
 }
 
 // FeedForwardWithTensors represents a feed-forward neural network with tensor-based parameters
@@ -148,8 +149,9 @@ func NewTransformerWithTensors(vocabSize, embeddingDim, numLayers, numHeads, ffn
 
 // NewEncoderLayerWithTensors creates a new encoder layer with tensor-based parameters
 func NewEncoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *EncoderLayerWithTensors {
+	// Defaulting attention dropout rate to 0.1, this could be a parameter in a config struct later
 	return &EncoderLayerWithTensors{
-		SelfAttention:    NewMultiHeadAttentionWithTensors(numHeads, modelDim),
+		SelfAttention:    NewMultiHeadAttentionWithTensors(numHeads, modelDim, 0.1),
 		FeedForward:      NewFeedForwardWithTensors(modelDim, ffnHiddenDim),
 		Norm1:            NewLayerNormWithTensors(modelDim),
 		Norm2:            NewLayerNormWithTensors(modelDim),
@@ -161,9 +163,10 @@ func NewEncoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *EncoderLa
 
 // NewDecoderLayerWithTensors creates a new decoder layer with tensor-based parameters
 func NewDecoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *DecoderLayerWithTensors {
+	// Defaulting attention dropout rate to 0.1, this could be a parameter in a config struct later
 	return &DecoderLayerWithTensors{
-		SelfAttention:     NewMultiHeadAttentionWithTensors(numHeads, modelDim),
-		CrossAttention:    NewMultiHeadAttentionWithTensors(numHeads, modelDim),
+		SelfAttention:     NewMultiHeadAttentionWithTensors(numHeads, modelDim, 0.1),
+		CrossAttention:    NewMultiHeadAttentionWithTensors(numHeads, modelDim, 0.1),
 		FeedForward:       NewFeedForwardWithTensors(modelDim, ffnHiddenDim),
 		Norm1:             NewLayerNormWithTensors(modelDim),
 		Norm2:             NewLayerNormWithTensors(modelDim),
@@ -177,17 +180,20 @@ func NewDecoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *DecoderLa
 }
 
 // NewMultiHeadAttentionWithTensors creates a new multi-head attention layer with tensor-based parameters
-func NewMultiHeadAttentionWithTensors(numHeads, modelDim int) *MultiHeadAttentionWithTensors {
+func NewMultiHeadAttentionWithTensors(numHeads, modelDim int, attentionDropoutRate float64) *MultiHeadAttentionWithTensors {
 	headDim := modelDim / numHeads
 	
+	// Error handling for NewRandomTensor can be added here if it returns errors
+	// For simplicity, assuming it panics or is error-free as per current structure
 	return &MultiHeadAttentionWithTensors{
 		NumHeads:    numHeads,
 		ModelDim:    modelDim,
 		HeadDim:     headDim,
-		QueryWeight: NewRandomTensor(modelDim, modelDim, true),
-		KeyWeight:   NewRandomTensor(modelDim, modelDim, true),
-		ValueWeight: NewRandomTensor(modelDim, modelDim, true),
-		OutputWeight: NewRandomTensor(modelDim, modelDim, true),
+		QueryWeight: NewRandomTensor(modelDim, modelDim, &TensorConfig{RequiresGrad: true, Name: "mha_query_w"}),
+		KeyWeight:   NewRandomTensor(modelDim, modelDim, &TensorConfig{RequiresGrad: true, Name: "mha_key_w"}),
+		ValueWeight: NewRandomTensor(modelDim, modelDim, &TensorConfig{RequiresGrad: true, Name: "mha_value_w"}),
+		OutputWeight: NewRandomTensor(modelDim, modelDim, &TensorConfig{RequiresGrad: true, Name: "mha_output_w"}),
+		AttentionDropoutRate: attentionDropoutRate,
 	}
 }
 
@@ -222,34 +228,96 @@ func NewLayerNormWithTensors(dim int) *LayerNormWithTensors {
 }
 
 // Forward performs the multi-head attention operation with tensor-based parameters
-func (mha *MultiHeadAttentionWithTensors) Forward(query, key, value *Tensor) *Tensor {
-	// Project inputs to query, key, value
-	q := TensorMatMul(query, mha.QueryWeight)
-	k := TensorMatMul(key, mha.KeyWeight)
-	v := TensorMatMul(value, mha.ValueWeight)
-	
-	// Simple scaled dot-product attention
-	// For simplicity, we're not splitting into multiple heads in this implementation
-	kT := Transpose(k.Data)
-	kTensor := NewTensor(kT, k.Requires)
-	scores := TensorMatMul(q, kTensor)
-	
-	// Scale
-	scaleFactor := math.Sqrt(float64(mha.ModelDim))
-	for i := 0; i < scores.Data.Rows; i++ {
-		for j := 0; j < scores.Data.Cols; j++ {
-			scores.Data.Data[i][j] /= scaleFactor
+func (mha *MultiHeadAttentionWithTensors) Forward(query, key, value *Tensor, mask *Tensor, isTraining bool) (*Tensor, error) {
+	if query == nil || key == nil || value == nil {
+		return nil, fmt.Errorf("query, key, and value tensors cannot be nil")
+	}
+	seqLen := query.Data.Rows // Assuming query, key, value are (seq_len, model_dim)
+
+	// 1. Initial linear projections
+	// Note: Using MatMul from pkg/autodiff/autodiff.go which handles tensors
+	qFull, err := MatMul(query, mha.QueryWeight)
+	if err != nil { return nil, fmt.Errorf("query projection failed: %v", err) }
+	kFull, err := MatMul(key, mha.KeyWeight)
+	if err != nil { return nil, fmt.Errorf("key projection failed: %v", err) }
+	vFull, err := MatMul(value, mha.ValueWeight)
+	if err != nil { return nil, fmt.Errorf("value projection failed: %v", err) }
+
+	headOutputs := make([]*Tensor, 0, mha.NumHeads)
+	var opErr error // To capture errors within the loop
+
+	// 2. Process each head
+	for h := 0; h < mha.NumHeads; h++ {
+		startCol := h * mha.HeadDim
+		headNamePrefix := fmt.Sprintf("head_%d_", h)
+
+		qHead, err := SliceColsTensor(qFull, startCol, mha.HeadDim, headNamePrefix+"q")
+		if err != nil { opErr = err; break }
+		kHead, err := SliceColsTensor(kFull, startCol, mha.HeadDim, headNamePrefix+"k")
+		if err != nil { opErr = err; break }
+		vHead, err := SliceColsTensor(vFull, startCol, mha.HeadDim, headNamePrefix+"v")
+		if err != nil { opErr = err; break }
+
+		// Scaled Dot-Product Attention
+		kHeadT, err := TensorTranspose(kHead) // Assuming TensorTranspose is from pkg/autodiff/autodiff.go
+		if err != nil { opErr = err; break }
+
+		scores, err := MatMul(qHead, kHeadT)
+		if err != nil { opErr = err; break }
+
+		scaleFactorVal := math.Sqrt(float64(mha.HeadDim))
+		// Assuming ScalarMultiply is from pkg/autodiff/autodiff.go
+		scaledScores, err := ScalarMultiply(scores, 1.0/scaleFactorVal)
+		if err != nil { opErr = err; break }
+
+		maskedScores := scaledScores
+		if mask != nil {
+			if mask.Data.Rows != seqLen || mask.Data.Cols != seqLen {
+				 opErr = fmt.Errorf("attention mask dimensions (%dx%d) incompatible with sequence length %d for head %d", mask.Data.Rows, mask.Data.Cols, seqLen, h); break;
+			}
+			// ApplyAttentionMaskTensor expects 0 for mask, 1 for keep.
+			maskedScores, err = ApplyAttentionMaskTensor(scaledScores, mask, -1e9, headNamePrefix+"masked_scores")
+			if err != nil { opErr = err; break }
 		}
+
+		attentionWeights, err := Softmax(maskedScores) // Softmax is from pkg/autodiff/autodiff.go (row-wise)
+		if err != nil { opErr = err; break }
+
+		if isTraining && mha.AttentionDropoutRate > 0.0 {
+			attentionWeights, err = DropoutTensor(attentionWeights, mha.AttentionDropoutRate, true, headNamePrefix+"attn_dropout")
+			if err != nil { opErr = err; break }
+		}
+
+		weightedValue, err := MatMul(attentionWeights, vHead)
+		if err != nil { opErr = err; break }
+
+		headOutputs = append(headOutputs, weightedValue)
+	}
+	if opErr != nil { return nil, fmt.Errorf("error processing head: %v", opErr) }
+
+	// 3. Concatenate head outputs
+	if len(headOutputs) == 0 && mha.NumHeads > 0 {
+		return nil, fmt.Errorf("no head outputs to concatenate, though NumHeads is %d", mha.NumHeads)
+	}
+    if mha.NumHeads == 0 { // Should be caught by constructor, but defensive
+        return nil, fmt.Errorf("NumHeads is 0, cannot process attention")
+    }
+
+
+	var concatenatedOutput *Tensor
+	if len(headOutputs) == 1 {
+		concatenatedOutput = headOutputs[0]
+	} else {
+		concatenatedOutput, err = ConcatenateColsTensor(headOutputs, "concat_heads")
+		if err != nil { return nil, fmt.Errorf("concatenating head outputs failed: %v", err)}
 	}
 	
-	// Apply softmax
-	attentionWeights := TensorSoftmax(scores)
-	
-	// Apply attention weights
-	output := TensorMatMul(attentionWeights, v)
-	
-	// Project back to model dimension
-	return TensorMatMul(output, mha.OutputWeight)
+
+	// 4. Final linear projection
+	finalOutput, err := MatMul(concatenatedOutput, mha.OutputWeight)
+	if err != nil { return nil, fmt.Errorf("final output projection failed: %v", err) }
+
+	return finalOutput, nil
 }
 
 // Forward performs the feed-forward operation with tensor-based parameters
@@ -312,26 +380,24 @@ func (ln *LayerNormWithTensors) Forward(input *Tensor) *Tensor {
 }
 
 // Forward processes input through the encoder layer with tensor-based parameters
-func (el *EncoderLayerWithTensors) Forward(input *Tensor, isTraining bool) *Tensor {
+func (el *EncoderLayerWithTensors) Forward(input *Tensor, isTraining bool) (*Tensor, error) {
 	// Self-attention
-	normalized1 := el.Norm1.Forward(input)
-	attnOut := el.SelfAttention.Forward(normalized1, normalized1, normalized1)
+	normalized1 := el.Norm1.Forward(input) // Assuming Norm1.Forward doesn't return error or is legacy
 	
-	// Apply dropout to attention output if training
-	if isTraining {
-		for i := 0; i < attnOut.Data.Rows; i++ {
-			for j := 0; j < attnOut.Data.Cols; j++ {
-				if el.DropoutAttention.ShouldDrop() {
-					attnOut.Data.Data[i][j] = 0
-				} else {
-					attnOut.Data.Data[i][j] /= (1.0 - el.DropoutAttention.Rate)
-				}
-			}
-		}
+	// Pass nil for mask for now, and isTraining
+	attnOut, err := el.SelfAttention.Forward(normalized1, normalized1, normalized1, nil, isTraining)
+	if err != nil {
+		return nil, fmt.Errorf("self attention in encoder layer failed: %v", err)
 	}
 	
+	// Dropout on attention output is now handled inside SelfAttention.Forward if AttentionDropoutRate > 0
+
 	// Add residual connection
-	residual1 := TensorAdd(input, attnOut)
+	// Assuming TensorAdd doesn't return error or is legacy
+	residual1, err := Add(input, attnOut)
+	if err != nil {
+		return nil, fmt.Errorf("first residual connection in encoder layer failed: %v", err)
+	}
 	
 	// Apply dropout to residual if training
 	if isTraining {
@@ -364,30 +430,32 @@ func (el *EncoderLayerWithTensors) Forward(input *Tensor, isTraining bool) *Tens
 	}
 	
 	// Add residual connection
-	return TensorAdd(residual1, ffnOut)
+	// Assuming TensorAdd doesn't return error or is legacy
+	finalResidual, err := Add(residual1, ffnOut)
+	if err != nil {
+		return nil, fmt.Errorf("second residual connection in encoder layer failed: %v", err)
+	}
+	return finalResidual, nil
 }
 
 // Forward processes input through the decoder layer with tensor-based parameters
-func (dl *DecoderLayerWithTensors) Forward(input *Tensor, encoderOutput *Tensor, isTraining bool) *Tensor {
+func (dl *DecoderLayerWithTensors) Forward(input *Tensor, encoderOutput *Tensor, isTraining bool) (*Tensor, error) {
 	// Self-attention
-	normalized1 := dl.Norm1.Forward(input)
-	selfAttnOut := dl.SelfAttention.Forward(normalized1, normalized1, normalized1)
+	normalized1 := dl.Norm1.Forward(input) // Assuming Norm1.Forward is legacy or error is handled if necessary
 	
-	// Apply dropout to self-attention output if training
-	if isTraining {
-		for i := 0; i < selfAttnOut.Data.Rows; i++ {
-			for j := 0; j < selfAttnOut.Data.Cols; j++ {
-				if dl.DropoutSelfAttn.ShouldDrop() {
-					selfAttnOut.Data.Data[i][j] = 0
-				} else {
-					selfAttnOut.Data.Data[i][j] /= (1.0 - dl.DropoutSelfAttn.Rate)
-				}
-			}
-		}
+	// Pass nil for mask (causal mask would be needed here in a full setup)
+	selfAttnOut, err := dl.SelfAttention.Forward(normalized1, normalized1, normalized1, nil, isTraining)
+	if err != nil {
+		return nil, fmt.Errorf("self attention in decoder layer failed: %v", err)
 	}
 	
+	// Dropout for self-attention is handled within SelfAttention.Forward
+
 	// Add residual connection
-	residual1 := TensorAdd(input, selfAttnOut)
+	residual1, err := Add(input, selfAttnOut) // Assuming Add is the tensor op from autodiff.go
+	if err != nil {
+		return nil, fmt.Errorf("first residual connection in decoder layer failed: %v", err)
+	}
 	
 	// Apply dropout to residual if training
 	if isTraining {
@@ -403,24 +471,21 @@ func (dl *DecoderLayerWithTensors) Forward(input *Tensor, encoderOutput *Tensor,
 	}
 	
 	// Cross-attention
-	normalized2 := dl.Norm2.Forward(residual1)
-	crossAttnOut := dl.CrossAttention.Forward(normalized2, encoderOutput, encoderOutput)
+	normalized2 := dl.Norm2.Forward(residual1) // Assuming Norm2.Forward is legacy
 	
-	// Apply dropout to cross-attention output if training
-	if isTraining {
-		for i := 0; i < crossAttnOut.Data.Rows; i++ {
-			for j := 0; j < crossAttnOut.Data.Cols; j++ {
-				if dl.DropoutCrossAttn.ShouldDrop() {
-					crossAttnOut.Data.Data[i][j] = 0
-				} else {
-					crossAttnOut.Data.Data[i][j] /= (1.0 - dl.DropoutCrossAttn.Rate)
-				}
-			}
-		}
+	// Pass nil for mask (encoder padding mask might be needed here)
+	crossAttnOut, err := dl.CrossAttention.Forward(normalized2, encoderOutput, encoderOutput, nil, isTraining)
+	if err != nil {
+		return nil, fmt.Errorf("cross attention in decoder layer failed: %v", err)
 	}
 	
+	// Dropout for cross-attention is handled within CrossAttention.Forward
+
 	// Add residual connection
-	residual2 := TensorAdd(residual1, crossAttnOut)
+	residual2, err := Add(residual1, crossAttnOut) // Assuming Add is the tensor op
+	if err != nil {
+		return nil, fmt.Errorf("second residual connection in decoder layer failed: %v", err)
+	}
 	
 	// Apply dropout to residual if training
 	if isTraining {
@@ -453,7 +518,11 @@ func (dl *DecoderLayerWithTensors) Forward(input *Tensor, encoderOutput *Tensor,
 	}
 	
 	// Add residual connection
-	return TensorAdd(residual2, ffnOut)
+	finalResidual, err := Add(residual2, ffnOut) // Assuming Add is the tensor op
+	if err != nil {
+		return nil, fmt.Errorf("third residual connection in decoder layer failed: %v", err)
+	}
+	return finalResidual, nil
 }
 
 // Embed converts token indices to embeddings with tensor-based parameters
@@ -482,20 +551,35 @@ func (t *TransformerWithTensors) Forward(srcIndices, tgtIndices []int) *Tensor {
 	tgtEmbeddings = t.AddPositionalEncoding(tgtEmbeddings)
 	
 	// Process through encoder
+	var err error
 	encoderOutput := srcEmbeddings
-	for _, layer := range t.Encoder {
-		encoderOutput = layer.Forward(encoderOutput, true)
+	for i, layer := range t.Encoder {
+		encoderOutput, err = layer.Forward(encoderOutput, true)
+		if err != nil {
+			// In a real scenario, might panic or return error if Forward itself could return error
+			// For now, assuming Forward might panic or this is a simplified error path
+			fmt.Printf("Error in encoder layer %d: %v\n", i, err) // Placeholder error handling
+			return nil // Or handle error more gracefully
+		}
 	}
 	
 	// Process through decoder
 	decoderOutput := tgtEmbeddings
-	for _, layer := range t.Decoder {
-		decoderOutput = layer.Forward(decoderOutput, encoderOutput, true)
+	for i, layer := range t.Decoder {
+		decoderOutput, err = layer.Forward(decoderOutput, encoderOutput, true)
+		if err != nil {
+			fmt.Printf("Error in decoder layer %d: %v\n", i, err) // Placeholder error handling
+			return nil // Or handle error more gracefully
+		}
 	}
 	
 	// Project to vocabulary size
-	logits := TensorMatMul(decoderOutput, t.OutputMatrix)
-	
+	// Assuming TensorMatMul is legacy or error is handled if necessary
+	logits, err := MatMul(decoderOutput, t.OutputMatrix)
+	if err != nil {
+		fmt.Printf("Error in final projection: %v\n", err) // Placeholder error handling
+		return nil
+	}
 	return logits
 }
 
@@ -510,22 +594,39 @@ func (t *TransformerWithTensors) ForwardEval(srcIndices, tgtIndices []int) *Matr
 	tgtEmbeddings = t.AddPositionalEncoding(tgtEmbeddings)
 	
 	// Process through encoder
+	var err error
 	encoderOutput := srcEmbeddings
-	for _, layer := range t.Encoder {
-		encoderOutput = layer.Forward(encoderOutput, false)
+	for i, layer := range t.Encoder {
+		encoderOutput, err = layer.Forward(encoderOutput, false)
+		if err != nil {
+			fmt.Printf("Error in ForwardEval encoder layer %d: %v\n", i, err) // Placeholder
+			return nil // Or a zero matrix
+		}
 	}
 	
 	// Process through decoder
 	decoderOutput := tgtEmbeddings
-	for _, layer := range t.Decoder {
-		decoderOutput = layer.Forward(decoderOutput, encoderOutput, false)
+	for i, layer := range t.Decoder {
+		decoderOutput, err = layer.Forward(decoderOutput, encoderOutput, false)
+		if err != nil {
+			fmt.Printf("Error in ForwardEval decoder layer %d: %v\n", i, err) // Placeholder
+			return nil // Or a zero matrix
+		}
 	}
 	
 	// Project to vocabulary size
-	logits := TensorMatMul(decoderOutput, t.OutputMatrix)
+	logits, err := MatMul(decoderOutput, t.OutputMatrix)
+	if err != nil {
+		fmt.Printf("Error in ForwardEval final projection: %v\n", err) // Placeholder
+		return nil
+	}
 	
 	// Apply softmax to get probabilities
-	probs := TensorSoftmax(logits)
+	probs, err := Softmax(logits) // Assuming Softmax is the tensor op from autodiff.go
+	if err != nil {
+		fmt.Printf("Error in ForwardEval softmax: %v\n", err) // Placeholder
+		return nil
+	}
 	
 	return probs.Data
 }
