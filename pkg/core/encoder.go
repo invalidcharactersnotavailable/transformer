@@ -3,7 +3,7 @@ package transformer
 // EncoderLayer represents a single encoder layer in a transformer
 type EncoderLayer struct {
 	SelfAttention *MultiHeadAttention
-	FeedForward   *FeedForward
+	FeedForward   *FeedForward // Corrected type
 	Norm1         *LayerNorm
 	Norm2         *LayerNorm
 	ModelDim      int
@@ -13,7 +13,7 @@ type EncoderLayer struct {
 func NewEncoderLayer(modelDim, ffnHiddenDim, numHeads int) *EncoderLayer {
 	return &EncoderLayer{
 		SelfAttention: NewMultiHeadAttention(numHeads, modelDim),
-		FeedForward:   NewFeedForward(modelDim, ffnHiddenDim),
+		FeedForward:   mustFeedForward(NewDefaultFeedForward(modelDim, ffnHiddenDim)), // Corrected line
 		Norm1:         NewLayerNorm(modelDim),
 		Norm2:         NewLayerNorm(modelDim),
 		ModelDim:      modelDim,
@@ -37,7 +37,7 @@ func (el *EncoderLayer) Forward(x *Matrix) *Matrix {
 	normalized1 := el.Norm1.Forward(residual1)
 	
 	// Feed-forward network
-	ffnOut := el.FeedForward.Forward(normalized1)
+	ffnOut := el.FeedForward.ForwardLegacy(normalized1) // Adjusted line
 	
 	// Add residual connection
 	residual2 := NewMatrix(normalized1.Rows, normalized1.Cols)
@@ -49,4 +49,12 @@ func (el *EncoderLayer) Forward(x *Matrix) *Matrix {
 	
 	// Apply layer normalization
 	return el.Norm2.Forward(residual2)
+}
+
+// mustFeedForward is a helper function to panic on error
+func mustFeedForward(ff *FeedForward, err error) *FeedForward { // Corrected type
+	if err != nil {
+		panic(err)
+	}
+	return ff
 }

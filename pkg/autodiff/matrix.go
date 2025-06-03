@@ -1,4 +1,4 @@
-package transformer
+package autodiff
 
 import (
 	"fmt"
@@ -18,12 +18,12 @@ func NewMatrix(rows, cols int) (*Matrix, error) {
 	if rows <= 0 || cols <= 0 {
 		return nil, fmt.Errorf("invalid matrix dimensions: rows=%d, cols=%d (must be positive)", rows, cols)
 	}
-	
+
 	data := make([][]float64, rows)
 	for i := range data {
 		data[i] = make([]float64, cols)
 	}
-	
+
 	return &Matrix{
 		Rows: rows,
 		Cols: cols,
@@ -41,20 +41,79 @@ func MustNewMatrix(rows, cols int) *Matrix {
 	return m
 }
 
+// sliceCols extracts a new matrix by slicing specified columns from an existing matrix.
+func sliceCols(m *Matrix, startCol, endCol int) (*Matrix, error) {
+	if m == nil {
+		return nil, fmt.Errorf("input matrix cannot be nil")
+	}
+	if startCol < 0 || endCol <= startCol || endCol > m.Cols {
+		return nil, fmt.Errorf("invalid column slice indices: start %d, end %d for matrix with %d cols", startCol, endCol, m.Cols)
+	}
+	numSlicedCols := endCol - startCol
+	sliced, err := NewMatrix(m.Rows, numSlicedCols) // Uses autodiff.NewMatrix
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new matrix for slice: %v", err)
+	}
+	for i := 0; i < m.Rows; i++ {
+		for j := 0; j < numSlicedCols; j++ {
+			sliced.Data[i][j] = m.Data[i][startCol+j]
+		}
+	}
+	return sliced, nil
+}
+
+// concatenateCols concatenates a list of matrices column-wise.
+// All matrices must have the same number of rows.
+func concatenateCols(matrices []*Matrix) (*Matrix, error) { // Renamed from concatenateColsMatrix for consistency
+	if len(matrices) == 0 {
+		return nil, fmt.Errorf("cannot concatenate empty list of matrices")
+	}
+	if matrices[0] == nil {
+		return nil, fmt.Errorf("first matrix in list cannot be nil")
+	}
+	numRows := matrices[0].Rows
+	totalCols := 0
+	for _, m := range matrices {
+		if m == nil {
+			return nil, fmt.Errorf("nil matrix found in list to concatenate")
+		}
+		if m.Rows != numRows {
+			return nil, fmt.Errorf("matrices must have the same number of rows (%d vs %d) to concatenate column-wise", m.Rows, numRows)
+		}
+		totalCols += m.Cols
+	}
+
+	concatenated, err := NewMatrix(numRows, totalCols) // Uses autodiff.NewMatrix
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new matrix for concatenation: %v", err)
+	}
+
+	currentStartCol := 0
+	for _, m := range matrices {
+		for i := 0; i < m.Rows; i++ {
+			for j := 0; j < m.Cols; j++ {
+				concatenated.Data[i][currentStartCol+j] = m.Data[i][j]
+			}
+		}
+		currentStartCol += m.Cols
+	}
+	return concatenated, nil
+}
+
 // NewRandomMatrix creates a new matrix with random values
 func NewRandomMatrix(rows, cols int) (*Matrix, error) {
 	m, err := NewMatrix(rows, cols)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Initialize with small random values for better training stability
 	for i := 0; i < rows; i++ {
 		for j := 0; j < cols; j++ {
 			m.Data[i][j] = rand.Float64()*0.2 - 0.1
 		}
 	}
-	
+
 	return m, nil
 }
 
@@ -74,13 +133,13 @@ func (m *Matrix) Clone() (*Matrix, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < m.Rows; i++ {
 		for j := 0; j < m.Cols; j++ {
 			clone.Data[i][j] = m.Data[i][j]
 		}
 	}
-	
+
 	return clone, nil
 }
 
@@ -99,17 +158,17 @@ func MatMul(a, b *Matrix) (*Matrix, error) {
 	if a == nil || b == nil {
 		return nil, fmt.Errorf("cannot multiply nil matrices")
 	}
-	
+
 	if a.Cols != b.Rows {
-		return nil, fmt.Errorf("matrix dimensions don't match for multiplication: a(%dx%d), b(%dx%d)", 
+		return nil, fmt.Errorf("matrix dimensions don't match for multiplication: a(%dx%d), b(%dx%d)",
 			a.Rows, a.Cols, b.Rows, b.Cols)
 	}
-	
+
 	result, err := NewMatrix(a.Rows, b.Cols)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < a.Rows; i++ {
 		for j := 0; j < b.Cols; j++ {
 			sum := 0.0
@@ -119,7 +178,7 @@ func MatMul(a, b *Matrix) (*Matrix, error) {
 			result.Data[i][j] = sum
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -138,23 +197,23 @@ func Add(a, b *Matrix) (*Matrix, error) {
 	if a == nil || b == nil {
 		return nil, fmt.Errorf("cannot add nil matrices")
 	}
-	
+
 	if a.Rows != b.Rows || a.Cols != b.Cols {
-		return nil, fmt.Errorf("matrix dimensions don't match for addition: a(%dx%d), b(%dx%d)", 
+		return nil, fmt.Errorf("matrix dimensions don't match for addition: a(%dx%d), b(%dx%d)",
 			a.Rows, a.Cols, b.Rows, b.Cols)
 	}
-	
+
 	result, err := NewMatrix(a.Rows, a.Cols)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < a.Rows; i++ {
 		for j := 0; j < a.Cols; j++ {
 			result.Data[i][j] = a.Data[i][j] + b.Data[i][j]
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -173,23 +232,23 @@ func Subtract(a, b *Matrix) (*Matrix, error) {
 	if a == nil || b == nil {
 		return nil, fmt.Errorf("cannot subtract nil matrices")
 	}
-	
+
 	if a.Rows != b.Rows || a.Cols != b.Cols {
-		return nil, fmt.Errorf("matrix dimensions don't match for subtraction: a(%dx%d), b(%dx%d)", 
+		return nil, fmt.Errorf("matrix dimensions don't match for subtraction: a(%dx%d), b(%dx%d)",
 			a.Rows, a.Cols, b.Rows, b.Cols)
 	}
-	
+
 	result, err := NewMatrix(a.Rows, a.Cols)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < a.Rows; i++ {
 		for j := 0; j < a.Cols; j++ {
 			result.Data[i][j] = a.Data[i][j] - b.Data[i][j]
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -208,23 +267,23 @@ func Multiply(a, b *Matrix) (*Matrix, error) {
 	if a == nil || b == nil {
 		return nil, fmt.Errorf("cannot multiply nil matrices")
 	}
-	
+
 	if a.Rows != b.Rows || a.Cols != b.Cols {
-		return nil, fmt.Errorf("matrix dimensions don't match for element-wise multiplication: a(%dx%d), b(%dx%d)", 
+		return nil, fmt.Errorf("matrix dimensions don't match for element-wise multiplication: a(%dx%d), b(%dx%d)",
 			a.Rows, a.Cols, b.Rows, b.Cols)
 	}
-	
+
 	result, err := NewMatrix(a.Rows, a.Cols)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < a.Rows; i++ {
 		for j := 0; j < a.Cols; j++ {
 			result.Data[i][j] = a.Data[i][j] * b.Data[i][j]
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -243,18 +302,18 @@ func ScalarMultiply(m *Matrix, scalar float64) (*Matrix, error) {
 	if m == nil {
 		return nil, fmt.Errorf("cannot multiply nil matrix by scalar")
 	}
-	
+
 	result, err := NewMatrix(m.Rows, m.Cols)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < m.Rows; i++ {
 		for j := 0; j < m.Cols; j++ {
 			result.Data[i][j] = m.Data[i][j] * scalar
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -273,18 +332,18 @@ func Transpose(m *Matrix) (*Matrix, error) {
 	if m == nil {
 		return nil, fmt.Errorf("cannot transpose nil matrix")
 	}
-	
+
 	result, err := NewMatrix(m.Cols, m.Rows)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < m.Rows; i++ {
 		for j := 0; j < m.Cols; j++ {
 			result.Data[j][i] = m.Data[i][j]
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -303,12 +362,12 @@ func Softmax(m *Matrix) (*Matrix, error) {
 	if m == nil {
 		return nil, fmt.Errorf("cannot apply softmax to nil matrix")
 	}
-	
+
 	result, err := NewMatrix(m.Rows, m.Cols)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < m.Rows; i++ {
 		// Find max value in row for numerical stability
 		max := m.Data[i][0]
@@ -317,20 +376,20 @@ func Softmax(m *Matrix) (*Matrix, error) {
 				max = m.Data[i][j]
 			}
 		}
-		
+
 		// Calculate exp and sum
 		sum := 0.0
 		for j := 0; j < m.Cols; j++ {
 			result.Data[i][j] = math.Exp(m.Data[i][j] - max)
 			sum += result.Data[i][j]
 		}
-		
+
 		// Normalize
 		for j := 0; j < m.Cols; j++ {
 			result.Data[i][j] /= sum
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -349,18 +408,18 @@ func ApplyFunction(m *Matrix, fn func(float64) float64) (*Matrix, error) {
 	if m == nil {
 		return nil, fmt.Errorf("cannot apply function to nil matrix")
 	}
-	
+
 	result, err := NewMatrix(m.Rows, m.Cols)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i := 0; i < m.Rows; i++ {
 		for j := 0; j < m.Cols; j++ {
 			result.Data[i][j] = fn(m.Data[i][j])
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -379,14 +438,14 @@ func Sum(m *Matrix) (float64, error) {
 	if m == nil {
 		return 0, fmt.Errorf("cannot sum nil matrix")
 	}
-	
+
 	sum := 0.0
 	for i := 0; i < m.Rows; i++ {
 		for j := 0; j < m.Cols; j++ {
 			sum += m.Data[i][j]
 		}
 	}
-	
+
 	return sum, nil
 }
 
@@ -405,16 +464,16 @@ func Mean(m *Matrix) (float64, error) {
 	if m == nil {
 		return 0, fmt.Errorf("cannot calculate mean of nil matrix")
 	}
-	
+
 	if m.Rows == 0 || m.Cols == 0 {
 		return 0, fmt.Errorf("cannot calculate mean of empty matrix")
 	}
-	
+
 	sum, err := Sum(m)
 	if err != nil {
 		return 0, err
 	}
-	
+
 	return sum / float64(m.Rows*m.Cols), nil
 }
 
@@ -433,11 +492,11 @@ func Equal(a, b *Matrix, epsilon float64) (bool, error) {
 	if a == nil || b == nil {
 		return false, fmt.Errorf("cannot compare nil matrices")
 	}
-	
+
 	if a.Rows != b.Rows || a.Cols != b.Cols {
 		return false, nil
 	}
-	
+
 	for i := 0; i < a.Rows; i++ {
 		for j := 0; j < a.Cols; j++ {
 			if math.Abs(a.Data[i][j] - b.Data[i][j]) > epsilon {
@@ -445,7 +504,7 @@ func Equal(a, b *Matrix, epsilon float64) (bool, error) {
 			}
 		}
 	}
-	
+
 	return true, nil
 }
 
@@ -464,7 +523,7 @@ func (m *Matrix) String() string {
 	if m == nil {
 		return "nil"
 	}
-	
+
 	result := fmt.Sprintf("Matrix(%dx%d):\n", m.Rows, m.Cols)
 	for i := 0; i < m.Rows; i++ {
 		result += "["
@@ -476,7 +535,7 @@ func (m *Matrix) String() string {
 		}
 		result += "]\n"
 	}
-	
+
 	return result
 }
 

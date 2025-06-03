@@ -4,7 +4,7 @@ package transformer
 type DecoderLayer struct {
 	SelfAttention     *MultiHeadAttention
 	CrossAttention    *MultiHeadAttention
-	FeedForward       *FeedForward
+	FeedForward       *FeedForward // Corrected type
 	Norm1             *LayerNorm
 	Norm2             *LayerNorm
 	Norm3             *LayerNorm
@@ -16,7 +16,7 @@ func NewDecoderLayer(modelDim, ffnHiddenDim, numHeads int) *DecoderLayer {
 	return &DecoderLayer{
 		SelfAttention:  NewMultiHeadAttention(numHeads, modelDim),
 		CrossAttention: NewMultiHeadAttention(numHeads, modelDim),
-		FeedForward:    NewFeedForward(modelDim, ffnHiddenDim),
+		FeedForward:    mustFeedForward(NewDefaultFeedForward(modelDim, ffnHiddenDim)), // Corrected line
 		Norm1:          NewLayerNorm(modelDim),
 		Norm2:          NewLayerNorm(modelDim),
 		Norm3:          NewLayerNorm(modelDim),
@@ -55,7 +55,7 @@ func (dl *DecoderLayer) Forward(x, encoderOutput *Matrix) *Matrix {
 	normalized2 := dl.Norm2.Forward(residual2)
 	
 	// Feed-forward network
-	ffnOut := dl.FeedForward.Forward(normalized2)
+	ffnOut := dl.FeedForward.ForwardLegacy(normalized2) // Adjusted line
 	
 	// Add residual connection
 	residual3 := NewMatrix(normalized2.Rows, normalized2.Cols)
