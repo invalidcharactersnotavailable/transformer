@@ -120,30 +120,63 @@ func NewPositionalEncoding(dim, maxLen int) *PositionalEncoding {
 		MaxLen:   maxLen,
 		Encoding: encoding,
 	}
+	"coreconfig "github.com/transformer_reorganized/pkg/core" // Alias for core config
+)
+
+// TransformerWithTensors represents the complete transformer model with tensor-based parameters
+type TransformerWithTensors struct {
+	Encoder           []*EncoderLayerWithTensors
+	Decoder           []*DecoderLayerWithTensors
+	PositionalEncoder *PositionalEncoding
+	EmbeddingDim      int
+	VocabSize         int
+	EmbeddingMatrix   *Tensor
+	OutputMatrix      *Tensor
+	Config            *coreconfig.Config // Store config for GetParameters
 }
 
 // NewTransformerWithTensors creates a new transformer model with tensor-based parameters
-func NewTransformerWithTensors(vocabSize, embeddingDim, numLayers, numHeads, ffnHiddenDim, maxLen int) *TransformerWithTensors {
-	// Create encoder layers
-	encoder := make([]*EncoderLayerWithTensors, numLayers)
-	for i := 0; i < numLayers; i++ {
-		encoder[i] = NewEncoderLayerWithTensors(embeddingDim, ffnHiddenDim, numHeads)
+func NewTransformerWithTensors(config *coreconfig.Config) *TransformerWithTensors {
+	encoder := make([]*EncoderLayerWithTensors, config.NumLayers)
+	if config.UseCrossLayerParameterSharing && config.NumLayers > 0 {
+		sharedEncoderLayer := NewEncoderLayerWithTensors(config.EmbeddingDim, config.FFNHiddenDim, config.NumHeads)
+		for i := 0; i < config.NumLayers; i++ {
+			encoder[i] = sharedEncoderLayer
+		}
+	} else {
+		for i := 0; i < config.NumLayers; i++ {
+			encoder[i] = NewEncoderLayerWithTensors(config.EmbeddingDim, config.FFNHiddenDim, config.NumHeads)
+		}
 	}
 	
-	// Create decoder layers
-	decoder := make([]*DecoderLayerWithTensors, numLayers)
-	for i := 0; i < numLayers; i++ {
-		decoder[i] = NewDecoderLayerWithTensors(embeddingDim, ffnHiddenDim, numHeads)
+	// Assuming similar structure for decoder layers if they exist (e.g. config.NumDecoderLayers)
+	// For this example, let's assume a symmetric number of decoder layers as encoder layers for simplicity.
+	decoder := make([]*DecoderLayerWithTensors, config.NumLayers) // Or config.NumDecoderLayers
+	if config.UseCrossLayerParameterSharing && config.NumLayers > 0 { // Or config.NumDecoderLayers
+		// Potentially a *different* shared decoder layer than the encoder one
+		sharedDecoderLayer := NewDecoderLayerWithTensors(config.EmbeddingDim, config.FFNHiddenDim, config.NumHeads)
+		for i := 0; i < config.NumLayers; i++ { // Or config.NumDecoderLayers
+			decoder[i] = sharedDecoderLayer
+		}
+	} else {
+		for i := 0; i < config.NumLayers; i++ { // Or config.NumDecoderLayers
+			decoder[i] = NewDecoderLayerWithTensors(config.EmbeddingDim, config.FFNHiddenDim, config.NumHeads)
+		}
 	}
 	
+	embeddingMatrix, _ := NewRandomTensor(config.VocabSize, config.EmbeddingDim, &TensorConfig{RequiresGrad: true, Name: "embedding_matrix"})
+	outputMatrix, _ := NewRandomTensor(config.EmbeddingDim, config.VocabSize, &TensorConfig{RequiresGrad: true, Name: "output_matrix"})
+
+
 	return &TransformerWithTensors{
 		Encoder:           encoder,
 		Decoder:           decoder,
-		PositionalEncoder: NewPositionalEncoding(embeddingDim, maxLen),
-		EmbeddingDim:      embeddingDim,
-		VocabSize:         vocabSize,
-		EmbeddingMatrix:   NewRandomTensor(vocabSize, embeddingDim, true),
-		OutputMatrix:      NewRandomTensor(embeddingDim, vocabSize, true),
+		PositionalEncoder: NewPositionalEncoding(config.EmbeddingDim, config.MaxLen),
+		EmbeddingDim:      config.EmbeddingDim,
+		VocabSize:         config.VocabSize,
+		EmbeddingMatrix:   embeddingMatrix,
+		OutputMatrix:      outputMatrix,
+		Config:            config, // Store the config
 	}
 }
 
@@ -653,57 +686,83 @@ func (t *TransformerWithTensors) GetParameters() map[string]*Tensor {
 	params := make(map[string]*Tensor)
 	
 	// Embedding and output matrices
-	params["embedding"] = t.EmbeddingMatrix
-	params["output"] = t.OutputMatrix
+	params["embedding_matrix"] = t.EmbeddingMatrix
+	params["output_matrix"] = t.OutputMatrix
 	
 	// Encoder parameters
-	for i, layer := range t.Encoder {
-		// Self-attention
-		params[fmt.Sprintf("encoder_%d_self_query", i)] = layer.SelfAttention.QueryWeight
-		params[fmt.Sprintf("encoder_%d_self_key", i)] = layer.SelfAttention.KeyWeight
-		params[fmt.Sprintf("encoder_%d_self_value", i)] = layer.SelfAttention.ValueWeight
-		params[fmt.Sprintf("encoder_%d_self_output", i)] = layer.SelfAttention.OutputWeight
-		
-		// Layer normalization
-		params[fmt.Sprintf("encoder_%d_norm1_gamma", i)] = layer.Norm1.Gamma
-		params[fmt.Sprintf("encoder_%d_norm1_beta", i)] = layer.Norm1.Beta
-		params[fmt.Sprintf("encoder_%d_norm2_gamma", i)] = layer.Norm2.Gamma
-		params[fmt.Sprintf("encoder_%d_norm2_beta", i)] = layer.Norm2.Beta
-		
-		// Feed-forward
-		params[fmt.Sprintf("encoder_%d_ffn_w1", i)] = layer.FeedForward.W1
-		params[fmt.Sprintf("encoder_%d_ffn_b1", i)] = layer.FeedForward.B1
-		params[fmt.Sprintf("encoder_%d_ffn_w2", i)] = layer.FeedForward.W2
-		params[fmt.Sprintf("encoder_%d_ffn_b2", i)] = layer.FeedForward.B2
+	if t.Config.UseCrossLayerParameterSharing && len(t.Encoder) > 0 {
+		sharedEncoderLayer := t.Encoder[0]
+		params["shared_encoder_self_query"] = sharedEncoderLayer.SelfAttention.QueryWeight
+		params["shared_encoder_self_key"] = sharedEncoderLayer.SelfAttention.KeyWeight
+		params["shared_encoder_self_value"] = sharedEncoderLayer.SelfAttention.ValueWeight
+		params["shared_encoder_self_output"] = sharedEncoderLayer.SelfAttention.OutputWeight
+		params["shared_encoder_norm1_gamma"] = sharedEncoderLayer.Norm1.Gamma
+		params["shared_encoder_norm1_beta"] = sharedEncoderLayer.Norm1.Beta
+		params["shared_encoder_norm2_gamma"] = sharedEncoderLayer.Norm2.Gamma
+		params["shared_encoder_norm2_beta"] = sharedEncoderLayer.Norm2.Beta
+		params["shared_encoder_ffn_w1"] = sharedEncoderLayer.FeedForward.W1
+		params["shared_encoder_ffn_b1"] = sharedEncoderLayer.FeedForward.B1
+		params["shared_encoder_ffn_w2"] = sharedEncoderLayer.FeedForward.W2
+		params["shared_encoder_ffn_b2"] = sharedEncoderLayer.FeedForward.B2
+	} else {
+		for i, layer := range t.Encoder {
+			params[fmt.Sprintf("encoder_%d_self_query", i)] = layer.SelfAttention.QueryWeight
+			params[fmt.Sprintf("encoder_%d_self_key", i)] = layer.SelfAttention.KeyWeight
+			params[fmt.Sprintf("encoder_%d_self_value", i)] = layer.SelfAttention.ValueWeight
+			params[fmt.Sprintf("encoder_%d_self_output", i)] = layer.SelfAttention.OutputWeight
+			params[fmt.Sprintf("encoder_%d_norm1_gamma", i)] = layer.Norm1.Gamma
+			params[fmt.Sprintf("encoder_%d_norm1_beta", i)] = layer.Norm1.Beta
+			params[fmt.Sprintf("encoder_%d_norm2_gamma", i)] = layer.Norm2.Gamma
+			params[fmt.Sprintf("encoder_%d_norm2_beta", i)] = layer.Norm2.Beta
+			params[fmt.Sprintf("encoder_%d_ffn_w1", i)] = layer.FeedForward.W1
+			params[fmt.Sprintf("encoder_%d_ffn_b1", i)] = layer.FeedForward.B1
+			params[fmt.Sprintf("encoder_%d_ffn_w2", i)] = layer.FeedForward.W2
+			params[fmt.Sprintf("encoder_%d_ffn_b2", i)] = layer.FeedForward.B2
+		}
 	}
 	
 	// Decoder parameters
-	for i, layer := range t.Decoder {
-		// Self-attention
-		params[fmt.Sprintf("decoder_%d_self_query", i)] = layer.SelfAttention.QueryWeight
-		params[fmt.Sprintf("decoder_%d_self_key", i)] = layer.SelfAttention.KeyWeight
-		params[fmt.Sprintf("decoder_%d_self_value", i)] = layer.SelfAttention.ValueWeight
-		params[fmt.Sprintf("decoder_%d_self_output", i)] = layer.SelfAttention.OutputWeight
-		
-		// Cross-attention
-		params[fmt.Sprintf("decoder_%d_cross_query", i)] = layer.CrossAttention.QueryWeight
-		params[fmt.Sprintf("decoder_%d_cross_key", i)] = layer.CrossAttention.KeyWeight
-		params[fmt.Sprintf("decoder_%d_cross_value", i)] = layer.CrossAttention.ValueWeight
-		params[fmt.Sprintf("decoder_%d_cross_output", i)] = layer.CrossAttention.OutputWeight
-		
-		// Layer normalization
-		params[fmt.Sprintf("decoder_%d_norm1_gamma", i)] = layer.Norm1.Gamma
-		params[fmt.Sprintf("decoder_%d_norm1_beta", i)] = layer.Norm1.Beta
-		params[fmt.Sprintf("decoder_%d_norm2_gamma", i)] = layer.Norm2.Gamma
-		params[fmt.Sprintf("decoder_%d_norm2_beta", i)] = layer.Norm2.Beta
-		params[fmt.Sprintf("decoder_%d_norm3_gamma", i)] = layer.Norm3.Gamma
-		params[fmt.Sprintf("decoder_%d_norm3_beta", i)] = layer.Norm3.Beta
-		
-		// Feed-forward
-		params[fmt.Sprintf("decoder_%d_ffn_w1", i)] = layer.FeedForward.W1
-		params[fmt.Sprintf("decoder_%d_ffn_b1", i)] = layer.FeedForward.B1
-		params[fmt.Sprintf("decoder_%d_ffn_w2", i)] = layer.FeedForward.W2
-		params[fmt.Sprintf("decoder_%d_ffn_b2", i)] = layer.FeedForward.B2
+	if t.Config.UseCrossLayerParameterSharing && len(t.Decoder) > 0 {
+		sharedDecoderLayer := t.Decoder[0]
+		params["shared_decoder_self_query"] = sharedDecoderLayer.SelfAttention.QueryWeight
+		params["shared_decoder_self_key"] = sharedDecoderLayer.SelfAttention.KeyWeight
+		params["shared_decoder_self_value"] = sharedDecoderLayer.SelfAttention.ValueWeight
+		params["shared_decoder_self_output"] = sharedDecoderLayer.SelfAttention.OutputWeight
+		params["shared_decoder_cross_query"] = sharedDecoderLayer.CrossAttention.QueryWeight
+		params["shared_decoder_cross_key"] = sharedDecoderLayer.CrossAttention.KeyWeight
+		params["shared_decoder_cross_value"] = sharedDecoderLayer.CrossAttention.ValueWeight
+		params["shared_decoder_cross_output"] = sharedDecoderLayer.CrossAttention.OutputWeight
+		params["shared_decoder_norm1_gamma"] = sharedDecoderLayer.Norm1.Gamma
+		params["shared_decoder_norm1_beta"] = sharedDecoderLayer.Norm1.Beta
+		params["shared_decoder_norm2_gamma"] = sharedDecoderLayer.Norm2.Gamma
+		params["shared_decoder_norm2_beta"] = sharedDecoderLayer.Norm2.Beta
+		params["shared_decoder_norm3_gamma"] = sharedDecoderLayer.Norm3.Gamma
+		params["shared_decoder_norm3_beta"] = sharedDecoderLayer.Norm3.Beta
+		params["shared_decoder_ffn_w1"] = sharedDecoderLayer.FeedForward.W1
+		params["shared_decoder_ffn_b1"] = sharedDecoderLayer.FeedForward.B1
+		params["shared_decoder_ffn_w2"] = sharedDecoderLayer.FeedForward.W2
+		params["shared_decoder_ffn_b2"] = sharedDecoderLayer.FeedForward.B2
+	} else {
+		for i, layer := range t.Decoder {
+			params[fmt.Sprintf("decoder_%d_self_query", i)] = layer.SelfAttention.QueryWeight
+			params[fmt.Sprintf("decoder_%d_self_key", i)] = layer.SelfAttention.KeyWeight
+			params[fmt.Sprintf("decoder_%d_self_value", i)] = layer.SelfAttention.ValueWeight
+			params[fmt.Sprintf("decoder_%d_self_output", i)] = layer.SelfAttention.OutputWeight
+			params[fmt.Sprintf("decoder_%d_cross_query", i)] = layer.CrossAttention.QueryWeight
+			params[fmt.Sprintf("decoder_%d_cross_key", i)] = layer.CrossAttention.KeyWeight
+			params[fmt.Sprintf("decoder_%d_cross_value", i)] = layer.CrossAttention.ValueWeight
+			params[fmt.Sprintf("decoder_%d_cross_output", i)] = layer.CrossAttention.OutputWeight
+			params[fmt.Sprintf("decoder_%d_norm1_gamma", i)] = layer.Norm1.Gamma
+			params[fmt.Sprintf("decoder_%d_norm1_beta", i)] = layer.Norm1.Beta
+			params[fmt.Sprintf("decoder_%d_norm2_gamma", i)] = layer.Norm2.Gamma
+			params[fmt.Sprintf("decoder_%d_norm2_beta", i)] = layer.Norm2.Beta
+			params[fmt.Sprintf("decoder_%d_norm3_gamma", i)] = layer.Norm3.Gamma
+			params[fmt.Sprintf("decoder_%d_norm3_beta", i)] = layer.Norm3.Beta
+			params[fmt.Sprintf("decoder_%d_ffn_w1", i)] = layer.FeedForward.W1
+			params[fmt.Sprintf("decoder_%d_ffn_b1", i)] = layer.FeedForward.B1
+			params[fmt.Sprintf("decoder_%d_ffn_w2", i)] = layer.FeedForward.W2
+			params[fmt.Sprintf("decoder_%d_ffn_b2", i)] = layer.FeedForward.B2
+		}
 	}
 	
 	return params
