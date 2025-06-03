@@ -1,3 +1,3 @@
-module github.com/transformer_reorganized
+module transformer
 
 go 1.24.3

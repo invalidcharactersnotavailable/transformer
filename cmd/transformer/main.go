@@ -3,22 +3,22 @@ package main
 import (
 	"fmt"
 	"os"
-	
-	"github.com/transformer_reorganized/core"
-	"github.com/transformer_reorganized/tokenizer"
+
+	"core"
+	"tokenizer"
 )
 
 // Main entry point for the reorganized transformer library
 func main() {
 	fmt.Println("Transformer Library - Reorganized Structure")
 	fmt.Println("==========================================")
-	
+
 	// Parse command line arguments
 	mode := "default"
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
 	}
-	
+
 	switch mode {
 	case "default":
 		runDefaultExample()
@@ -34,7 +34,7 @@ func main() {
 func runDefaultExample() {
 	fmt.Println("\nRunning Default Example:")
 	fmt.Println("------------------------")
-	
+
 	// Initialize configuration
 	config := core.NewDefaultConfig()
 	fmt.Println("Configuration initialized with:")
@@ -42,17 +42,17 @@ func runDefaultExample() {
 	fmt.Printf("- Embedding dimension: %d\n", config.EmbeddingDim)
 	fmt.Printf("- Number of layers: %d\n", config.NumLayers)
 	fmt.Printf("- Number of attention heads: %d\n", config.NumHeads)
-	
+
 	// Create a simple vocabulary for demonstration
 	vocab := []string{"<UNK>", "hello", "world", "transformer", "model", "in", "go"}
 	tokenizer := tokenizer.NewSimpleTokenizer(vocab)
-	
+
 	// Encode some text
 	srcText := "hello world"
 	fmt.Println("\nTokenizing text:", srcText)
 	srcTokens := tokenizer.Encode(srcText)
 	fmt.Println("Tokens:", srcTokens)
-	
+
 	fmt.Println("\nTransformer library successfully initialized!")
 }
 
