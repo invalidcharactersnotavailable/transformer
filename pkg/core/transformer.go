@@ -1,6 +1,10 @@
 package transformer
 
-// Transformer represents the complete transformer model
+// DEPRECATED: This Transformer uses Matrix-based parameters and is not connected to
+// the automatic differentiation system. It is not suitable for training with the
+// current gradient-based fine-tuning pipeline.
+// For a trainable model, please use `TransformerWithTensors` from the `autodiff` package
+// and the `GradientFineTuner` from `autodiff` package.
 type Transformer struct {
 	Encoder           []*EncoderLayer
 	Decoder           []*DecoderLayer

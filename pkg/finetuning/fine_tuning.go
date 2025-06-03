@@ -1,5 +1,19 @@
 package transformer
 
+/*
+DEPRECATED / NON-FUNCTIONAL FOR TRAINING:
+This entire file defines a fine-tuning setup (`FineTuner`, `FineTuningConfig`, etc.)
+that targets the Matrix-based `Transformer` from `pkg/core/transformer.go`.
+However, the gradient computation (`ComputeGradients`) in this file is a placeholder
+and does NOT perform actual backpropagation.
+
+This fine-tuning implementation is therefore NON-FUNCTIONAL for actual model training.
+
+For a functional, gradient-based training pipeline, please use:
+- `TransformerWithTensors` from the `autodiff` package.
+- `GradientFineTuner` and associated optimizers from the `autodiff` package.
+*/
+
 import (
 	"fmt"
 	"math/rand"
