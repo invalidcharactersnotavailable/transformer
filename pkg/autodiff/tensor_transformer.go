@@ -3,767 +3,373 @@ package autodiff
 import (
 	"fmt"
 	"math"
+	"math/rand"
+
+	"github.com/transformer_reorganized/pkg/core"
+	"github.com/transformer_reorganized/pkg/moe"
 )
 
-// TransformerWithTensors represents the complete transformer model with tensor-based parameters
+// TransformerWithTensors structure
 type TransformerWithTensors struct {
 	Encoder           []*EncoderLayerWithTensors
 	Decoder           []*DecoderLayerWithTensors
-	PositionalEncoder *PositionalEncoding
-	EmbeddingDim      int
-	VocabSize         int
-	EmbeddingMatrix   *Tensor
+	PositionalEncoder *PositionalEncodingTensor
+	EmbeddingLayer    *EmbeddingTensor
 	OutputMatrix      *Tensor
+	OutputBias        *Tensor
+	Config            *core.Config
+	Graph             *ComputationGraph
+	Dropout           *DropoutTensor
 }
 
-// EncoderLayerWithTensors represents a single encoder layer with tensor-based parameters
-type EncoderLayerWithTensors struct {
-	SelfAttention    *MultiHeadAttentionWithTensors
-	FeedForward      *FeedForwardWithTensors
-	Norm1            *LayerNormWithTensors
-	Norm2            *LayerNormWithTensors
-	DropoutAttention *Dropout
-	DropoutFFN       *Dropout
-	DropoutResidual  *Dropout
-}
+// NewTransformerWithTensors constructor
+func NewTransformerWithTensors(config *core.Config, graph *ComputationGraph) *TransformerWithTensors {
+	if graph == nil { graph = NewComputationGraph() }
+	requiresGrad := true
 
-// DecoderLayerWithTensors represents a single decoder layer with tensor-based parameters
-type DecoderLayerWithTensors struct {
-	SelfAttention     *MultiHeadAttentionWithTensors
-	CrossAttention    *MultiHeadAttentionWithTensors
-	FeedForward       *FeedForwardWithTensors
-	Norm1             *LayerNormWithTensors
-	Norm2             *LayerNormWithTensors
-	Norm3             *LayerNormWithTensors
-	DropoutSelfAttn   *Dropout
-	DropoutCrossAttn  *Dropout
-	DropoutFFN        *Dropout
-	DropoutResidual1  *Dropout
-	DropoutResidual2  *Dropout
-}
-
-// MultiHeadAttentionWithTensors represents a multi-head attention mechanism with tensor-based parameters
-type MultiHeadAttentionWithTensors struct {
-	NumHeads    int
-	ModelDim    int
-	HeadDim     int
-	QueryWeight *Tensor
-	KeyWeight   *Tensor
-	ValueWeight *Tensor
-	OutputWeight *Tensor
-	AttentionDropoutRate float64
-}
-
-// FeedForwardWithTensors represents a feed-forward neural network with tensor-based parameters
-type FeedForwardWithTensors struct {
-	InputDim  int
-	HiddenDim int
-	W1        *Tensor
-	B1        *Tensor
-	W2        *Tensor
-	B2        *Tensor
-}
-
-// LayerNormWithTensors represents layer normalization with tensor-based parameters
-type LayerNormWithTensors struct {
-	Dim    int
-	Gamma  *Tensor
-	Beta   *Tensor
-	Eps    float64
-}
-
-// PositionalEncoding represents positional encoding for transformer inputs
-type PositionalEncoding struct {
-	Dim      int
-	MaxLen   int
-	Encoding *Matrix
-}
-
-// Dropout represents dropout for regularization
-type Dropout struct {
-	Rate float64
-}
-
-// NewDropout creates a new dropout layer
-func NewDropout(rate float64) *Dropout {
-	return &Dropout{Rate: rate}
-}
-
-// ShouldDrop returns whether to drop a value
-func (d *Dropout) ShouldDrop() bool {
-	return rand.Float64() < d.Rate
-}
-
-// NewPositionalEncoding creates a new positional encoding component
-func NewPositionalEncoding(dim, maxLen int) *PositionalEncoding {
-	encoding := NewMatrix(maxLen, dim)
-	
-	for pos := 0; pos < maxLen; pos++ {
-		for i := 0; i < dim; i += 2 {
-			// Calculate the sine and cosine values
-			denominator := math.Pow(10000, float64(i)/float64(dim))
-			
-			// Sine for even indices
-			if i < dim {
-				encoding.Data[pos][i] = math.Sin(float64(pos) / denominator)
-			}
-			
-			// Cosine for odd indices
-			if i+1 < dim {
-				encoding.Data[pos][i+1] = math.Cos(float64(pos) / denominator)
-			}
+	// Populate MoELayerConfig from core.Config
+	// Note: RouterZLossCoeff and LoadBalanceLossCoeff are now part of MoELayerConfig itself.
+	// They will be passed from TensorFineTuningConfig to core.Config, then to MoELayerConfig.
+	moeLayerConf := moe.MoELayerConfig{
+		ModelDim:             config.EmbeddingDim,
+		NumExperts:           config.MoENumExperts,
+		HiddenDim:            config.MoEHiddenDim,
+		TopK:                 config.MoETopK,
+		CapacityFactor:       config.MoECapacityFactor,
+		NoisyRouting:         config.MoENoisyRouting,
+		RouterZLossCoeff:     config.MoERouterZLossCoeff,     // Get from core.Config
+		LoadBalanceLossCoeff: config.MoELoadBalanceLossCoeff, // Get from core.Config
+	}
+	if moeActivationName := config.MoEActivationName; moeActivationName != "" {
+		switch moeActivationName {
+		case "gelu":
+			moeLayerConf.Activation = GELU
+		case "relu":
+			moeLayerConf.Activation = ReLU
+		default:
+			fmt.Printf("Warning: Unknown MoE activation name '%s', defaulting to GELU.\n", moeActivationName)
+			moeLayerConf.Activation = GELU
 		}
+	} else {
+		moeLayerConf.Activation = GELU // Default if not specified
 	}
-	
-	return &PositionalEncoding{
-		Dim:      dim,
-		MaxLen:   maxLen,
-		Encoding: encoding,
-	}
-	"coreconfig "github.com/transformer_reorganized/pkg/core" // Alias for core config
-)
 
-// TransformerWithTensors represents the complete transformer model with tensor-based parameters
-type TransformerWithTensors struct {
-	Encoder           []*EncoderLayerWithTensors
-	Decoder           []*DecoderLayerWithTensors
-	PositionalEncoder *PositionalEncoding
-	EmbeddingDim      int
-	VocabSize         int
-	EmbeddingMatrix   *Tensor
-	OutputMatrix      *Tensor
-	Config            *coreconfig.Config // Store config for GetParameters
-}
 
-// NewTransformerWithTensors creates a new transformer model with tensor-based parameters
-func NewTransformerWithTensors(config *coreconfig.Config) *TransformerWithTensors {
 	encoder := make([]*EncoderLayerWithTensors, config.NumLayers)
-	if config.UseCrossLayerParameterSharing && config.NumLayers > 0 {
-		sharedEncoderLayer := NewEncoderLayerWithTensors(config.EmbeddingDim, config.FFNHiddenDim, config.NumHeads)
-		for i := 0; i < config.NumLayers; i++ {
-			encoder[i] = sharedEncoderLayer
+	for i := 0; i < config.NumLayers; i++ {
+		if config.UseCrossLayerParameterSharing && i > 0 { encoder[i] = encoder[0]
+		} else { encoder[i] = NewEncoderLayerWithTensors(config, config.DropoutRate, config.UseMoE, moeLayerConf, requiresGrad, graph) }
+	}
+	decoder := make([]*DecoderLayerWithTensors, config.NumLayers)
+	for i := 0; i < config.NumLayers; i++ {
+		if config.UseCrossLayerParameterSharing && i > 0 { decoder[i] = decoder[0]
+		} else { decoder[i] = NewDecoderLayerWithTensors(config, config.DropoutRate, config.UseMoE, moeLayerConf, requiresGrad, graph) }
+	}
+	
+	embeddingL := NewEmbeddingTensor(config.VocabSize,config.EmbeddingDim,requiresGrad,graph)
+	posEncL := NewPositionalEncodingTensor(config.EmbeddingDim,config.MaxLen,graph)
+	outMatCfg := &TensorConfig{RequiresGrad:true, Name:"output_matrix", Graph:graph}
+	outMat,_ := NewRandomTensor(config.EmbeddingDim, config.VocabSize, outMatCfg)
+	outBiasData, _ := NewMatrix(1, config.VocabSize)
+	outBiasCfg := &TensorConfig{RequiresGrad:true, Name:"output_bias", Graph:graph}
+	outBias,_ := NewTensor(outBiasData, outBiasCfg)
+
+	return &TransformerWithTensors{ Encoder:encoder, Decoder:decoder, PositionalEncoder:posEncL, EmbeddingLayer:embeddingL, OutputMatrix:outMat, OutputBias:outBias, Config:config, Graph:graph, Dropout:NewDropoutTensor(config.DropoutRate) }
+}
+
+// EncoderLayerWithTensors structure and constructor
+type EncoderLayerWithTensors struct {
+	SelfAttention *MultiHeadAttentionWithTensors; FeedForward *FeedForwardWithTensors
+	Norm1 *LayerNormWithTensors; Norm2 *LayerNormWithTensors; Dropout *DropoutTensor
+	MoELayer *moe.MoELayer; IsMoE bool; Graph *ComputationGraph
+}
+func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig moe.MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *EncoderLayerWithTensors {
+	el := &EncoderLayerWithTensors{
+		SelfAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim, config.NumHeads, dropoutRate, requiresGrad, graph),
+		Norm1:         NewLayerNormWithTensors(config.EmbeddingDim, requiresGrad, graph),
+		Norm2:         NewLayerNormWithTensors(config.EmbeddingDim, requiresGrad, graph),
+		Dropout:       NewDropoutTensor(dropoutRate), IsMoE: useMoE, Graph: graph,
+	}
+
+	var ffActivationFunc func(*Tensor) (*Tensor, error)
+	switch config.ActivationFuncName {
+	case "relu":
+		ffActivationFunc = ReLU
+	case "gelu":
+		ffActivationFunc = GELU
+	default:
+		fmt.Printf("Warning: Unknown FFN activation name '%s', defaulting to GELU.\n", config.ActivationFuncName)
+		ffActivationFunc = GELU
+	}
+
+	if useMoE {
+		moeConfig.ModelDim = config.EmbeddingDim
+		if moeConfig.Activation == nil { // If not already set by TransformerWithTensors constructor from MoEActivationName
+			// Default MoE expert activation can be same as standard FFN or specific
+			moeConfig.Activation = ffActivationFunc // Or a specific MoE default like GELU
 		}
+		el.MoELayer = moe.NewMoELayer(moeConfig, requiresGrad, graph); el.FeedForward = nil
 	} else {
-		for i := 0; i < config.NumLayers; i++ {
-			encoder[i] = NewEncoderLayerWithTensors(config.EmbeddingDim, config.FFNHiddenDim, config.NumHeads)
-		}
+		el.FeedForward = NewFeedForwardWithTensors(config.EmbeddingDim, config.FFNHiddenDim, dropoutRate, ffActivationFunc, requiresGrad, graph); el.MoELayer = nil
 	}
-	
-	// Assuming similar structure for decoder layers if they exist (e.g. config.NumDecoderLayers)
-	// For this example, let's assume a symmetric number of decoder layers as encoder layers for simplicity.
-	decoder := make([]*DecoderLayerWithTensors, config.NumLayers) // Or config.NumDecoderLayers
-	if config.UseCrossLayerParameterSharing && config.NumLayers > 0 { // Or config.NumDecoderLayers
-		// Potentially a *different* shared decoder layer than the encoder one
-		sharedDecoderLayer := NewDecoderLayerWithTensors(config.EmbeddingDim, config.FFNHiddenDim, config.NumHeads)
-		for i := 0; i < config.NumLayers; i++ { // Or config.NumDecoderLayers
-			decoder[i] = sharedDecoderLayer
-		}
+	return el
+}
+
+// DecoderLayerWithTensors structure and constructor
+type DecoderLayerWithTensors struct {
+	SelfAttention *MultiHeadAttentionWithTensors; CrossAttention *MultiHeadAttentionWithTensors
+	FeedForward *FeedForwardWithTensors; Norm1 *LayerNormWithTensors; Norm2 *LayerNormWithTensors; Norm3 *LayerNormWithTensors
+	Dropout *DropoutTensor; MoELayer *moe.MoELayer; IsMoE bool; Graph *ComputationGraph
+}
+func NewDecoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig moe.MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *DecoderLayerWithTensors {
+	dl := &DecoderLayerWithTensors{
+		SelfAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim,config.NumHeads,dropoutRate,requiresGrad,graph), CrossAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim,config.NumHeads,dropoutRate,requiresGrad,graph),
+		Norm1: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph), Norm2: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph), Norm3: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph),
+		Dropout: NewDropoutTensor(dropoutRate), IsMoE: useMoE, Graph: graph,
+	}
+	var ffActivationFunc func(*Tensor) (*Tensor, error)
+	switch config.ActivationFuncName {
+	case "relu":
+		ffActivationFunc = ReLU
+	case "gelu":
+		ffActivationFunc = GELU
+	default:
+		ffActivationFunc = GELU
+	}
+
+	if useMoE {
+		moeConfig.ModelDim = config.EmbeddingDim
+		if moeConfig.Activation == nil { moeConfig.Activation = ffActivationFunc }
+		dl.MoELayer = moe.NewMoELayer(moeConfig, requiresGrad, graph); dl.FeedForward = nil
 	} else {
-		for i := 0; i < config.NumLayers; i++ { // Or config.NumDecoderLayers
-			decoder[i] = NewDecoderLayerWithTensors(config.EmbeddingDim, config.FFNHiddenDim, config.NumHeads)
-		}
+		dl.FeedForward = NewFeedForwardWithTensors(config.EmbeddingDim,config.FFNHiddenDim,dropoutRate,ffActivationFunc,requiresGrad,graph); dl.MoELayer = nil
 	}
-	
-	embeddingMatrix, _ := NewRandomTensor(config.VocabSize, config.EmbeddingDim, &TensorConfig{RequiresGrad: true, Name: "embedding_matrix"})
-	outputMatrix, _ := NewRandomTensor(config.EmbeddingDim, config.VocabSize, &TensorConfig{RequiresGrad: true, Name: "output_matrix"})
+	return dl
+}
 
-
-	return &TransformerWithTensors{
-		Encoder:           encoder,
-		Decoder:           decoder,
-		PositionalEncoder: NewPositionalEncoding(config.EmbeddingDim, config.MaxLen),
-		EmbeddingDim:      config.EmbeddingDim,
-		VocabSize:         config.VocabSize,
-		EmbeddingMatrix:   embeddingMatrix,
-		OutputMatrix:      outputMatrix,
-		Config:            config, // Store the config
+// MHA structure and constructor (assuming unchanged from previous correct version)
+type MultiHeadAttentionWithTensors struct {
+	NumHeads int; ModelDim int; HeadDim int; QueryWeight *Tensor; KeyWeight *Tensor; ValueWeight *Tensor; OutputWeight *Tensor
+	AttentionDropout *DropoutTensor; Graph *ComputationGraph
+}
+func NewMultiHeadAttentionWithTensors(modelDim,numHeads int,attDropRate float64,reqGrad bool,g *ComputationGraph) *MultiHeadAttentionWithTensors {
+	hD:=modelDim/numHeads;sfx:=fmt.Sprintf("_mha_d%d_h%d",modelDim,numHeads); tc:=func(n string)*TensorConfig{return &TensorConfig{RequiresGrad:reqGrad,Name:n,Graph:g}}
+	return &MultiHeadAttentionWithTensors{NumHeads:numHeads,ModelDim:modelDim,HeadDim:hD,Graph:g,
+		QueryWeight:NewRandomTensorFallback(modelDim,modelDim,tc("q_w"+sfx)), KeyWeight:NewRandomTensorFallback(modelDim,modelDim,tc("k_w"+sfx)),
+		ValueWeight:NewRandomTensorFallback(modelDim,modelDim,tc("v_w"+sfx)), OutputWeight:NewRandomTensorFallback(modelDim,modelDim,tc("o_w"+sfx)),
+		AttentionDropout:NewDropoutTensor(attDropRate),
 	}
 }
 
-// NewEncoderLayerWithTensors creates a new encoder layer with tensor-based parameters
-func NewEncoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *EncoderLayerWithTensors {
-	// Defaulting attention dropout rate to 0.1, this could be a parameter in a config struct later
-	return &EncoderLayerWithTensors{
-		SelfAttention:    NewMultiHeadAttentionWithTensors(numHeads, modelDim, 0.1),
-		FeedForward:      NewFeedForwardWithTensors(modelDim, ffnHiddenDim),
-		Norm1:            NewLayerNormWithTensors(modelDim),
-		Norm2:            NewLayerNormWithTensors(modelDim),
-		DropoutAttention: NewDropout(0.1),
-		DropoutFFN:       NewDropout(0.1),
-		DropoutResidual:  NewDropout(0.1),
+// FFN structure and constructor (assuming unchanged from previous correct version)
+type FeedForwardWithTensors struct {
+	InputDim int; HiddenDim int; W1 *Tensor; B1 *Tensor; W2 *Tensor; B2 *Tensor
+	Dropout *DropoutTensor; Graph *ComputationGraph; Activation func(*Tensor)(*Tensor,error)
+}
+func NewFeedForwardWithTensors(inD,hidD int,dropRate float64,act func(*Tensor)(*Tensor,error),reqGrad bool,g *ComputationGraph) *FeedForwardWithTensors {
+	sfx:=fmt.Sprintf("_ffn_i%d_h%d",inD,hidD);tc:=func(n string)*TensorConfig{return &TensorConfig{RequiresGrad:reqGrad,Name:n,Graph:g}}; a:=act;if a==nil{a=GELU} // Ensure 'a' gets GELU if act is nil
+	return &FeedForwardWithTensors{InputDim:inD,HiddenDim:hidD,Graph:g,Activation:a,Dropout:NewDropoutTensor(dropRate),
+		W1:NewRandomTensorFallback(inD,hidD,tc("w1"+sfx)), B1:NewZerosTensorFallback(nil,1,hidD,tc("b1"+sfx)),
+		W2:NewRandomTensorFallback(hidD,inD,tc("w2"+sfx)), B2:NewZerosTensorFallback(nil,1,inD,tc("b2"+sfx)),
 	}
 }
 
-// NewDecoderLayerWithTensors creates a new decoder layer with tensor-based parameters
-func NewDecoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *DecoderLayerWithTensors {
-	// Defaulting attention dropout rate to 0.1, this could be a parameter in a config struct later
-	return &DecoderLayerWithTensors{
-		SelfAttention:     NewMultiHeadAttentionWithTensors(numHeads, modelDim, 0.1),
-		CrossAttention:    NewMultiHeadAttentionWithTensors(numHeads, modelDim, 0.1),
-		FeedForward:       NewFeedForwardWithTensors(modelDim, ffnHiddenDim),
-		Norm1:             NewLayerNormWithTensors(modelDim),
-		Norm2:             NewLayerNormWithTensors(modelDim),
-		Norm3:             NewLayerNormWithTensors(modelDim),
-		DropoutSelfAttn:   NewDropout(0.1),
-		DropoutCrossAttn:  NewDropout(0.1),
-		DropoutFFN:        NewDropout(0.1),
-		DropoutResidual1:  NewDropout(0.1),
-		DropoutResidual2:  NewDropout(0.1),
-	}
+// LayerNorm structure and constructor (assuming unchanged from previous correct version)
+type LayerNormWithTensors struct { Dim int; Gamma *Tensor; Beta *Tensor; Eps float64; Graph *ComputationGraph }
+func NewLayerNormWithTensors(dim int,reqGrad bool,g *ComputationGraph) *LayerNormWithTensors {
+	sfx:=fmt.Sprintf("_ln_d%d",dim);tcG:=&TensorConfig{RequiresGrad:reqGrad,Name:"gamma"+sfx,Graph:g};tcB:=&TensorConfig{RequiresGrad:reqGrad,Name:"beta"+sfx,Graph:g}
+	gD,_:=NewMatrix(1,dim);for j:=0;j<dim;j++{gD.Data[0][j]=1.0};gam,_:=NewTensor(gD,tcG)
+	bD,_:=NewMatrix(1,dim);bet,_:=NewTensor(bD,tcB)
+	return &LayerNormWithTensors{Dim:dim,Gamma:gam,Beta:bet,Eps:1e-5,Graph:g}
 }
 
-// NewMultiHeadAttentionWithTensors creates a new multi-head attention layer with tensor-based parameters
-func NewMultiHeadAttentionWithTensors(numHeads, modelDim int, attentionDropoutRate float64) *MultiHeadAttentionWithTensors {
-	headDim := modelDim / numHeads
-	
-	// Error handling for NewRandomTensor can be added here if it returns errors
-	// For simplicity, assuming it panics or is error-free as per current structure
-	return &MultiHeadAttentionWithTensors{
-		NumHeads:    numHeads,
-		ModelDim:    modelDim,
-		HeadDim:     headDim,
-		QueryWeight: NewRandomTensor(modelDim, modelDim, &TensorConfig{RequiresGrad: true, Name: "mha_query_w"}),
-		KeyWeight:   NewRandomTensor(modelDim, modelDim, &TensorConfig{RequiresGrad: true, Name: "mha_key_w"}),
-		ValueWeight: NewRandomTensor(modelDim, modelDim, &TensorConfig{RequiresGrad: true, Name: "mha_value_w"}),
-		OutputWeight: NewRandomTensor(modelDim, modelDim, &TensorConfig{RequiresGrad: true, Name: "mha_output_w"}),
-		AttentionDropoutRate: attentionDropoutRate,
-	}
+// PositionalEncodingTensor structure and constructor (assuming unchanged)
+type PositionalEncodingTensor struct { Dim int; MaxLen int; Encoding *Tensor; Graph *ComputationGraph }
+func NewPositionalEncodingTensor(dim,maxLen int,g *ComputationGraph) *PositionalEncodingTensor {
+	dat:=make([][]float64,maxLen);for p:=0;p<maxLen;p++{dat[p]=make([]float64,dim);for i:=0;i<dim;i+=2{den:=math.Pow(10000,float64(i)/float64(dim));if i<dim{dat[p][i]=math.Sin(float64(p)/den)};if i+1<dim{dat[p][i+1]=math.Cos(float64(p)/den)}}}
+	mat,_:=NewMatrix(maxLen,dim,dat...);pet,_:=NewTensor(mat,&TensorConfig{RequiresGrad:false,Name:"pe_const",Graph:g})
+	return &PositionalEncodingTensor{Dim:dim,MaxLen:maxLen,Encoding:pet,Graph:g}
 }
 
-// NewFeedForwardWithTensors creates a new feed-forward network with tensor-based parameters
-func NewFeedForwardWithTensors(inputDim, hiddenDim int) *FeedForwardWithTensors {
-	return &FeedForwardWithTensors{
-		InputDim:  inputDim,
-		HiddenDim: hiddenDim,
-		W1:        NewRandomTensor(inputDim, hiddenDim, true),
-		B1:        NewZerosTensor(1, hiddenDim, true),
-		W2:        NewRandomTensor(hiddenDim, inputDim, true),
-		B2:        NewZerosTensor(1, inputDim, true),
+// Forward for PositionalEncodingTensor (assuming unchanged)
+func (pe *PositionalEncodingTensor) Forward(embeddings *Tensor) (*Tensor, error) {
+	numTokens := embeddings.Shape()[0]; sliceEnd := numTokens;
+	if numTokens > pe.MaxLen { sliceEnd = pe.MaxLen; fmt.Printf("Warning: PE input seqLen %d > MaxLen %d.\n", numTokens, pe.MaxLen) }
+	slicedPE, err := TensorSlice(pe.Encoding, []*SliceArg{{Start:0, End: sliceEnd},{Start:0, End:pe.Dim}}, "pe_slice")
+	if err != nil { return nil, fmt.Errorf("slicing PE: %w", err)}
+	if numTokens > pe.MaxLen {
+		embeddingsPrefix, errSlice := TensorSlice(embeddings, []*SliceArg{{Start:0,End:pe.MaxLen},{Start:0,End:embeddings.Shape()[1]}}, "emb_prefix_for_pe")
+		if errSlice != nil { return nil, fmt.Errorf("slicing embeddings for PE: %w", errSlice)}
+		// fmt.Printf("Warning: Output sequence effectively truncated to PE.MaxLen %d from %d tokens due to PE.\n", pe.MaxLen, numTokens) // Reduce verbosity
+		return Add(embeddingsPrefix, slicedPE)
 	}
+	return Add(embeddings, slicedPE)
 }
 
-// NewLayerNormWithTensors creates a new layer normalization with tensor-based parameters
-func NewLayerNormWithTensors(dim int) *LayerNormWithTensors {
-	gamma := NewZerosTensor(1, dim, true)
-	beta := NewZerosTensor(1, dim, true)
-	
-	// Initialize gamma to ones
-	for j := 0; j < dim; j++ {
-		gamma.Data.Data[0][j] = 1.0
-	}
-	
-	return &LayerNormWithTensors{
-		Dim:   dim,
-		Gamma: gamma,
-		Beta:  beta,
-		Eps:   1e-5,
-	}
+// EmbeddingTensor structure and constructor (assuming unchanged)
+type EmbeddingTensor struct { NumEmbeddings int; EmbeddingDim int; Weights *Tensor; Graph *ComputationGraph }
+func NewEmbeddingTensor(numEmb,embDim int,reqGrad bool,g *ComputationGraph) *EmbeddingTensor {
+	w,_:=NewRandomTensor(numEmb,embDim,&TensorConfig{RequiresGrad:reqGrad,Name:"emb_weights",Graph:g})
+	return &EmbeddingTensor{NumEmbeddings:numEmb,EmbeddingDim:embDim,Weights:w,Graph:g}
 }
 
-// Forward performs the multi-head attention operation with tensor-based parameters
-func (mha *MultiHeadAttentionWithTensors) Forward(query, key, value *Tensor, mask *Tensor, isTraining bool) (*Tensor, error) {
-	if query == nil || key == nil || value == nil {
-		return nil, fmt.Errorf("query, key, and value tensors cannot be nil")
+// Forward for EmbeddingTensor (assuming unchanged from previous correct version using TensorGather)
+func (e *EmbeddingTensor) Forward(indices *Tensor) (*Tensor, error) {
+	if indices.Data == nil { return nil, fmt.Errorf("indices tensor data is nil") }
+	batchSize := indices.Shape()[0]; seqLen := indices.Shape()[1]; numIndicesTotal := batchSize * seqLen
+	if numIndicesTotal == 0 {
+		emptyData, _ := NewMatrix(0, e.EmbeddingDim)
+		return NewTensor(emptyData,&TensorConfig{Graph:e.Graph,RequiresGrad:e.Weights.RequiresGrad, Name:fmt.Sprintf("EmbedEmpty(%s)",indices.Name)})
 	}
-	seqLen := query.Data.Rows // Assuming query, key, value are (seq_len, model_dim)
-
-	// 1. Initial linear projections
-	// Note: Using MatMul from pkg/autodiff/autodiff.go which handles tensors
-	qFull, err := MatMul(query, mha.QueryWeight)
-	if err != nil { return nil, fmt.Errorf("query projection failed: %v", err) }
-	kFull, err := MatMul(key, mha.KeyWeight)
-	if err != nil { return nil, fmt.Errorf("key projection failed: %v", err) }
-	vFull, err := MatMul(value, mha.ValueWeight)
-	if err != nil { return nil, fmt.Errorf("value projection failed: %v", err) }
-
-	headOutputs := make([]*Tensor, 0, mha.NumHeads)
-	var opErr error // To capture errors within the loop
-
-	// 2. Process each head
-	for h := 0; h < mha.NumHeads; h++ {
-		startCol := h * mha.HeadDim
-		headNamePrefix := fmt.Sprintf("head_%d_", h)
-
-		qHead, err := SliceColsTensor(qFull, startCol, mha.HeadDim, headNamePrefix+"q")
-		if err != nil { opErr = err; break }
-		kHead, err := SliceColsTensor(kFull, startCol, mha.HeadDim, headNamePrefix+"k")
-		if err != nil { opErr = err; break }
-		vHead, err := SliceColsTensor(vFull, startCol, mha.HeadDim, headNamePrefix+"v")
-		if err != nil { opErr = err; break }
-
-		// Scaled Dot-Product Attention
-		kHeadT, err := TensorTranspose(kHead) // Assuming TensorTranspose is from pkg/autodiff/autodiff.go
-		if err != nil { opErr = err; break }
-
-		scores, err := MatMul(qHead, kHeadT)
-		if err != nil { opErr = err; break }
-
-		scaleFactorVal := math.Sqrt(float64(mha.HeadDim))
-		// Assuming ScalarMultiply is from pkg/autodiff/autodiff.go
-		scaledScores, err := ScalarMultiply(scores, 1.0/scaleFactorVal)
-		if err != nil { opErr = err; break }
-
-		maskedScores := scaledScores
-		if mask != nil {
-			if mask.Data.Rows != seqLen || mask.Data.Cols != seqLen {
-				 opErr = fmt.Errorf("attention mask dimensions (%dx%d) incompatible with sequence length %d for head %d", mask.Data.Rows, mask.Data.Cols, seqLen, h); break;
-			}
-			// ApplyAttentionMaskTensor expects 0 for mask, 1 for keep.
-			maskedScores, err = ApplyAttentionMaskTensor(scaledScores, mask, -1e9, headNamePrefix+"masked_scores")
-			if err != nil { opErr = err; break }
-		}
-
-		attentionWeights, err := Softmax(maskedScores) // Softmax is from pkg/autodiff/autodiff.go (row-wise)
-		if err != nil { opErr = err; break }
-
-		if isTraining && mha.AttentionDropoutRate > 0.0 {
-			attentionWeights, err = DropoutTensor(attentionWeights, mha.AttentionDropoutRate, true, headNamePrefix+"attn_dropout")
-			if err != nil { opErr = err; break }
-		}
-
-		weightedValue, err := MatMul(attentionWeights, vHead)
-		if err != nil { opErr = err; break }
-
-		headOutputs = append(headOutputs, weightedValue)
-	}
-	if opErr != nil { return nil, fmt.Errorf("error processing head: %v", opErr) }
-
-	// 3. Concatenate head outputs
-	if len(headOutputs) == 0 && mha.NumHeads > 0 {
-		return nil, fmt.Errorf("no head outputs to concatenate, though NumHeads is %d", mha.NumHeads)
-	}
-    if mha.NumHeads == 0 { // Should be caught by constructor, but defensive
-        return nil, fmt.Errorf("NumHeads is 0, cannot process attention")
-    }
-
-
-	var concatenatedOutput *Tensor
-	if len(headOutputs) == 1 {
-		concatenatedOutput = headOutputs[0]
-	} else {
-		concatenatedOutput, err = ConcatenateColsTensor(headOutputs, "concat_heads")
-		if err != nil { return nil, fmt.Errorf("concatenating head outputs failed: %v", err)}
-	}
-	
-
-	// 4. Final linear projection
-	finalOutput, err := MatMul(concatenatedOutput, mha.OutputWeight)
-	if err != nil { return nil, fmt.Errorf("final output projection failed: %v", err) }
-
-	return finalOutput, nil
+	flatIndicesData := make([][]float64, numIndicesTotal)
+	idxCounter := 0
+	for i := 0; i < batchSize; i++ { for j := 0; j < seqLen; j++ { flatIndicesData[idxCounter] = []float64{indices.Data.Data[i][j]}; idxCounter++ } }
+	flatIndicesMatrix, err := NewMatrix(numIndicesTotal, 1, flatIndicesData...); if err != nil { return nil, err}
+	flatIndicesTensor, err := NewTensor(flatIndicesMatrix, &TensorConfig{Graph: e.Graph, Name: fmt.Sprintf("FlatIndices_Embed(%s)", indices.Name), RequiresGrad: false}); if err != nil { return nil, err}
+	gatheredEmbeddings, err := TensorGather(e.Weights, flatIndicesTensor, 0)
+	if err != nil { return nil, fmt.Errorf("embedding lookup via TensorGather failed: %w", err) }
+	gatheredEmbeddings.Name = fmt.Sprintf("EmbedOut(%s)", indices.Name)
+	return gatheredEmbeddings, nil
 }
 
-// Forward performs the feed-forward operation with tensor-based parameters
-func (ff *FeedForwardWithTensors) Forward(input *Tensor) *Tensor {
-	// First linear transformation
-	hidden := TensorMatMul(input, ff.W1)
-	
-	// Add bias
-	for i := 0; i < hidden.Data.Rows; i++ {
-		for j := 0; j < hidden.Data.Cols; j++ {
-			hidden.Data.Data[i][j] += ff.B1.Data.Data[0][j]
-		}
+// Forward for TransformerWithTensors (assuming unchanged from previous correct version)
+func (t *TransformerWithTensors) Forward(srcIndicesTensor, tgtIndicesTensor *Tensor, srcMask, tgtMask *Tensor, isTraining bool) (*Tensor, error) {
+	var err error
+	srcEmbedded, err := t.EmbeddingLayer.Forward(srcIndicesTensor); if err != nil { return nil, fmt.Errorf("src embed: %w", err) }
+	tgtEmbedded, err := t.EmbeddingLayer.Forward(tgtIndicesTensor); if err != nil { return nil, fmt.Errorf("tgt embed: %w", err) }
+	srcWithPos, err := t.PositionalEncoder.Forward(srcEmbedded); if err != nil { return nil, fmt.Errorf("src posenc: %w", err) }
+	tgtWithPos, err := t.PositionalEncoder.Forward(tgtEmbedded); if err != nil { return nil, fmt.Errorf("tgt posenc: %w", err) }
+	currentSrc := srcWithPos; currentTgt := tgtWithPos
+	if t.Dropout != nil {
+		currentSrc, err = t.Dropout.Forward(currentSrc, isTraining); if err != nil { return nil, fmt.Errorf("src dropout: %w", err)}
+		currentTgt, err = t.Dropout.Forward(currentTgt, isTraining); if err != nil { return nil, fmt.Errorf("tgt dropout: %w", err)}
 	}
-	
-	// Apply ReLU activation
-	hidden = TensorReLU(hidden)
-	
-	// Second linear transformation
-	output := TensorMatMul(hidden, ff.W2)
-	
-	// Add bias
-	for i := 0; i < output.Data.Rows; i++ {
-		for j := 0; j < output.Data.Cols; j++ {
-			output.Data.Data[i][j] += ff.B2.Data.Data[0][j]
-		}
-	}
-	
-	return output
+	encoderOutput := currentSrc
+	for i, layer := range t.Encoder { encoderOutput, err = layer.Forward(encoderOutput, isTraining); if err != nil { return nil, fmt.Errorf("enc layer %d: %w", i, err) } }
+	decoderOutput := currentTgt
+	for i, layer := range t.Decoder { decoderOutput, err = layer.Forward(decoderOutput, encoderOutput, isTraining, srcMask, tgtMask); if err != nil { return nil, fmt.Errorf("dec layer %d: %w", i, err) } }
+	logits, err := MatMul(decoderOutput, t.OutputMatrix); if err != nil { return nil, fmt.Errorf("final MatMul: %w", err) }
+	if t.OutputBias != nil { logits, err = Add(logits, t.OutputBias); if err != nil { return nil, fmt.Errorf("output bias: %w", err)} }
+	return logits, nil
 }
 
-// Forward performs layer normalization with tensor-based parameters
-func (ln *LayerNormWithTensors) Forward(input *Tensor) *Tensor {
-	result := NewZerosTensor(input.Data.Rows, input.Data.Cols, input.Requires)
-	
-	// Normalize each row independently
-	for i := 0; i < input.Data.Rows; i++ {
-		// Calculate mean
-		mean := 0.0
-		for j := 0; j < input.Data.Cols; j++ {
-			mean += input.Data.Data[i][j]
-		}
-		mean /= float64(input.Data.Cols)
-		
-		// Calculate variance
-		variance := 0.0
-		for j := 0; j < input.Data.Cols; j++ {
-			diff := input.Data.Data[i][j] - mean
-			variance += diff * diff
-		}
-		variance /= float64(input.Data.Cols)
-		
-		// Normalize, scale, and shift
-		for j := 0; j < input.Data.Cols; j++ {
-			normalized := (input.Data.Data[i][j] - mean) / math.Sqrt(variance+ln.Eps)
-			result.Data.Data[i][j] = normalized*ln.Gamma.Data.Data[0][j] + ln.Beta.Data.Data[0][j]
-		}
-	}
-	
-	return result
+// GetMoELayers and GetParameters methods (assuming unchanged)
+func (t *TransformerWithTensors) GetMoELayers() []*moe.MoELayer { /* ... */
+	ls := []*moe.MoELayer{}; for _, l := range t.Encoder { if l.IsMoE && l.MoELayer != nil { ls = append(ls, l.MoELayer) } }; for _, l := range t.Decoder { if l.IsMoE && l.MoELayer != nil { ls = append(ls, l.MoELayer) } }; return ls
+}
+func (t *TransformerWithTensors) GetParameters() []*Tensor { /* ... */
+	pm:=make(map[*Tensor]bool);ap:=[]*Tensor{};addP:=func(p*Tensor){if p!=nil&&p.RequiresGrad&&!pm[p]{ap=append(ap,p);pm[p]=true}};addPS:=func(ps[]*Tensor){for _,p:=range ps{addP(p)}}
+	if t.EmbeddingLayer!=nil{addPS(t.EmbeddingLayer.GetParameters())};addP(t.OutputMatrix);addP(t.OutputBias)
+	for _,l:=range t.Encoder{addPS(l.GetParameters())};for _,l:=range t.Decoder{addPS(l.GetParameters())}; return ap
+}
+func (t *TransformerWithTensors) GetNamedParameters() map[string]*Tensor { /* ... */
+	p:=make(map[string]*Tensor)
+	if t.EmbeddingLayer!=nil&&t.EmbeddingLayer.Weights!=nil&&t.EmbeddingLayer.Weights.RequiresGrad{p[t.EmbeddingLayer.Weights.Name]=t.EmbeddingLayer.Weights}
+	if t.OutputMatrix!=nil&&t.OutputMatrix.RequiresGrad{p[t.OutputMatrix.Name]=t.OutputMatrix}
+	if t.OutputBias!=nil&&t.OutputBias.RequiresGrad{p[t.OutputBias.Name]=t.OutputBias}
+	addNP:=func(lps[]*Tensor,prfx string,idx int,shrd bool){for _,param:=range lps{if param!=nil&&param.RequiresGrad{n:=param.Name;if n==""{n=fmt.Sprintf("unnamed_%s_%d_p%p",prfx,idx,param)};fn:=fmt.Sprintf("%s_%d_%s",prfx,idx,n);if shrd{fn=fmt.Sprintf("shared_%s_%s",prfx,n)};p[fn]=param}}}
+	if t.Config.UseCrossLayerParameterSharing{if len(t.Encoder)>0{addNP(t.Encoder[0].GetParameters(),"encoder",0,true)};if len(t.Decoder)>0{addNP(t.Decoder[0].GetParameters(),"decoder",0,true)}}else{for i,l:=range t.Encoder{addNP(l.GetParameters(),"encoder",i,false)};for i,l:=range t.Decoder{addNP(l.GetParameters(),"decoder",i,false)}}
+	return p
 }
 
-// Forward processes input through the encoder layer with tensor-based parameters
+// Fallbacks and Component GetParameters (assuming unchanged)
+func NewRandomTensorFallback(r,c int, cfg *TensorConfig) *Tensor { t,_:=NewRandomTensor(r,c,cfg); return t }
+func NewZerosTensorFallback(r,c int, cfg *TensorConfig) *Tensor { t,_:= NewZerosTensor(cfg, r,c); return t }
+func (e *EmbeddingTensor) GetParameters() []*Tensor { if e.Weights!=nil&&e.Weights.RequiresGrad{return[]*Tensor{e.Weights}}; return[]*Tensor{} }
+func (pe *PositionalEncodingTensor) GetParameters() []*Tensor { return []*Tensor{} }
+func (el *EncoderLayerWithTensors) GetParameters() []*Tensor { ps:=el.SelfAttention.GetParameters();if el.IsMoE{if el.MoELayer!=nil{ps=append(ps,el.MoELayer.GetParameters()...)}}else{if el.FeedForward!=nil{ps=append(ps,el.FeedForward.GetParameters()...)}};ps=append(ps,el.Norm1.GetParameters()...);ps=append(ps,el.Norm2.GetParameters()...);return ps }
+func (dl *DecoderLayerWithTensors) GetParameters() []*Tensor { ps:=dl.SelfAttention.GetParameters();ps=append(ps,dl.CrossAttention.GetParameters()...);if dl.IsMoE{if dl.MoELayer!=nil{ps=append(ps,dl.MoELayer.GetParameters()...)}}else{if dl.FeedForward!=nil{ps=append(ps,dl.FeedForward.GetParameters()...)}};ps=append(ps,dl.Norm1.GetParameters()...);ps=append(ps,dl.Norm2.GetParameters()...);ps=append(ps,dl.Norm3.GetParameters()...);return ps }
+func (mha *MultiHeadAttentionWithTensors) GetParameters() []*Tensor { return []*Tensor{mha.QueryWeight,mha.KeyWeight,mha.ValueWeight,mha.OutputWeight} }
+func (ff *FeedForwardWithTensors) GetParameters() []*Tensor { return []*Tensor{ff.W1,ff.B1,ff.W2,ff.B2} }
+func (ln *LayerNormWithTensors) GetParameters() []*Tensor { return []*Tensor{ln.Gamma,ln.Beta} }
+
+// DropoutTensor struct and methods (assuming unchanged)
+type DropoutTensor struct { Rate float64 }
+func NewDropoutTensor(rate float64) *DropoutTensor { return &DropoutTensor{Rate: rate} }
+func (d *DropoutTensor) Forward(input *Tensor, isTraining bool) (*Tensor, error) {
+    if !isTraining || d.Rate == 0 { return input, nil }
+    return DropoutTensor(input, d.Rate, isTraining, fmt.Sprintf("%s_do",input.Name) )
+}
+
+// Layer Forward methods (assuming structure largely unchanged, but calls graph ops)
 func (el *EncoderLayerWithTensors) Forward(input *Tensor, isTraining bool) (*Tensor, error) {
-	// Self-attention
-	normalized1 := el.Norm1.Forward(input) // Assuming Norm1.Forward doesn't return error or is legacy
-	
-	// Pass nil for mask for now, and isTraining
-	attnOut, err := el.SelfAttention.Forward(normalized1, normalized1, normalized1, nil, isTraining)
-	if err != nil {
-		return nil, fmt.Errorf("self attention in encoder layer failed: %v", err)
+	var err error; var attnOut, norm1Out, residual1, norm_output_for_ffn, sublayer_output, finalResidual *Tensor
+	norm1Out, err = el.Norm1.Forward(input); if err != nil { return nil, fmt.Errorf("enc Norm1: %w", err) }
+	attnOut, err = el.SelfAttention.Forward(norm1Out, norm1Out, norm1Out, nil, isTraining); if err != nil { return nil, fmt.Errorf("enc SelfAttn: %w", err) }
+	attnOut, err = el.Dropout.Forward(attnOut, isTraining); if err != nil { return nil, fmt.Errorf("enc AttnDropout: %w", err) }
+	residual1, err = Add(input, attnOut); if err != nil { return nil, fmt.Errorf("enc Res1: %w", err) }
+	norm_output_for_ffn, err = el.Norm2.Forward(residual1); if err != nil { return nil, fmt.Errorf("enc Norm2: %w", err) }
+	if el.IsMoE {
+		if el.MoELayer==nil{return nil,fmt.Errorf("enc MoELayer nil")}; sublayer_output,err = el.MoELayer.Forward(norm_output_for_ffn,isTraining); if err!=nil{return nil,fmt.Errorf("enc MoE fwd: %w",err)}
+	} else {
+		if el.FeedForward==nil{return nil,fmt.Errorf("enc FFN nil")}; sublayer_output,err = el.FeedForward.Forward(norm_output_for_ffn,isTraining); if err!=nil{return nil,fmt.Errorf("enc FFN fwd: %w",err)}
 	}
-	
-	// Dropout on attention output is now handled inside SelfAttention.Forward if AttentionDropoutRate > 0
-
-	// Add residual connection
-	// Assuming TensorAdd doesn't return error or is legacy
-	residual1, err := Add(input, attnOut)
-	if err != nil {
-		return nil, fmt.Errorf("first residual connection in encoder layer failed: %v", err)
-	}
-	
-	// Apply dropout to residual if training
-	if isTraining {
-		for i := 0; i < residual1.Data.Rows; i++ {
-			for j := 0; j < residual1.Data.Cols; j++ {
-				if el.DropoutResidual.ShouldDrop() {
-					residual1.Data.Data[i][j] = 0
-				} else {
-					residual1.Data.Data[i][j] /= (1.0 - el.DropoutResidual.Rate)
-				}
-			}
-		}
-	}
-	
-	// Feed-forward network
-	normalized2 := el.Norm2.Forward(residual1)
-	ffnOut := el.FeedForward.Forward(normalized2)
-	
-	// Apply dropout to FFN output if training
-	if isTraining {
-		for i := 0; i < ffnOut.Data.Rows; i++ {
-			for j := 0; j < ffnOut.Data.Cols; j++ {
-				if el.DropoutFFN.ShouldDrop() {
-					ffnOut.Data.Data[i][j] = 0
-				} else {
-					ffnOut.Data.Data[i][j] /= (1.0 - el.DropoutFFN.Rate)
-				}
-			}
-		}
-	}
-	
-	// Add residual connection
-	// Assuming TensorAdd doesn't return error or is legacy
-	finalResidual, err := Add(residual1, ffnOut)
-	if err != nil {
-		return nil, fmt.Errorf("second residual connection in encoder layer failed: %v", err)
-	}
+	sublayer_output, err = el.Dropout.Forward(sublayer_output, isTraining); if err != nil { return nil, fmt.Errorf("enc FFNDropout: %w", err) }
+	finalResidual, err = Add(residual1, sublayer_output); if err != nil { return nil, fmt.Errorf("enc Res2: %w", err) }
 	return finalResidual, nil
 }
 
-// Forward processes input through the decoder layer with tensor-based parameters
-func (dl *DecoderLayerWithTensors) Forward(input *Tensor, encoderOutput *Tensor, isTraining bool) (*Tensor, error) {
-	// Self-attention
-	normalized1 := dl.Norm1.Forward(input) // Assuming Norm1.Forward is legacy or error is handled if necessary
-	
-	// Pass nil for mask (causal mask would be needed here in a full setup)
-	selfAttnOut, err := dl.SelfAttention.Forward(normalized1, normalized1, normalized1, nil, isTraining)
-	if err != nil {
-		return nil, fmt.Errorf("self attention in decoder layer failed: %v", err)
-	}
-	
-	// Dropout for self-attention is handled within SelfAttention.Forward
-
-	// Add residual connection
-	residual1, err := Add(input, selfAttnOut) // Assuming Add is the tensor op from autodiff.go
-	if err != nil {
-		return nil, fmt.Errorf("first residual connection in decoder layer failed: %v", err)
-	}
-	
-	// Apply dropout to residual if training
-	if isTraining {
-		for i := 0; i < residual1.Data.Rows; i++ {
-			for j := 0; j < residual1.Data.Cols; j++ {
-				if dl.DropoutResidual1.ShouldDrop() {
-					residual1.Data.Data[i][j] = 0
-				} else {
-					residual1.Data.Data[i][j] /= (1.0 - dl.DropoutResidual1.Rate)
-				}
-			}
-		}
-	}
-	
-	// Cross-attention
-	normalized2 := dl.Norm2.Forward(residual1) // Assuming Norm2.Forward is legacy
-	
-	// Pass nil for mask (encoder padding mask might be needed here)
-	crossAttnOut, err := dl.CrossAttention.Forward(normalized2, encoderOutput, encoderOutput, nil, isTraining)
-	if err != nil {
-		return nil, fmt.Errorf("cross attention in decoder layer failed: %v", err)
-	}
-	
-	// Dropout for cross-attention is handled within CrossAttention.Forward
-
-	// Add residual connection
-	residual2, err := Add(residual1, crossAttnOut) // Assuming Add is the tensor op
-	if err != nil {
-		return nil, fmt.Errorf("second residual connection in decoder layer failed: %v", err)
-	}
-	
-	// Apply dropout to residual if training
-	if isTraining {
-		for i := 0; i < residual2.Data.Rows; i++ {
-			for j := 0; j < residual2.Data.Cols; j++ {
-				if dl.DropoutResidual2.ShouldDrop() {
-					residual2.Data.Data[i][j] = 0
-				} else {
-					residual2.Data.Data[i][j] /= (1.0 - dl.DropoutResidual2.Rate)
-				}
-			}
-		}
-	}
-	
-	// Feed-forward network
-	normalized3 := dl.Norm3.Forward(residual2)
-	ffnOut := dl.FeedForward.Forward(normalized3)
-	
-	// Apply dropout to FFN output if training
-	if isTraining {
-		for i := 0; i < ffnOut.Data.Rows; i++ {
-			for j := 0; j < ffnOut.Data.Cols; j++ {
-				if dl.DropoutFFN.ShouldDrop() {
-					ffnOut.Data.Data[i][j] = 0
-				} else {
-					ffnOut.Data.Data[i][j] /= (1.0 - dl.DropoutFFN.Rate)
-				}
-			}
-		}
-	}
-	
-	// Add residual connection
-	finalResidual, err := Add(residual2, ffnOut) // Assuming Add is the tensor op
-	if err != nil {
-		return nil, fmt.Errorf("third residual connection in decoder layer failed: %v", err)
-	}
-	return finalResidual, nil
+func (dl *DecoderLayerWithTensors) Forward(input *Tensor, encoderOutput *Tensor, isTraining bool, srcMask, tgtMask *Tensor) (*Tensor, error) {
+	var err error; var selfAttnOut,norm1Out,residual1,norm_output_for_cross_attn,crossAttnOut,residual2,norm_output_for_ffn,sublayer_output,finalResidual *Tensor
+    norm1Out,err=dl.Norm1.Forward(input);if err!=nil{return nil,fmt.Errorf("dec Norm1: %w",err)}
+    selfAttnOut,err=dl.SelfAttention.Forward(norm1Out,norm1Out,norm1Out,tgtMask,isTraining);if err!=nil{return nil,fmt.Errorf("dec SelfAttn: %w",err)}
+    selfAttnOut,err=dl.Dropout.Forward(selfAttnOut,isTraining);if err!=nil{return nil,fmt.Errorf("dec SelfAttnDrop: %w",err)}
+    residual1,err=Add(input,selfAttnOut);if err!=nil{return nil,fmt.Errorf("dec Res1: %w",err)}
+    norm_output_for_cross_attn,err=dl.Norm2.Forward(residual1);if err!=nil{return nil,fmt.Errorf("dec Norm2: %w",err)}
+    crossAttnOut,err=dl.CrossAttention.Forward(norm_output_for_cross_attn,encoderOutput,encoderOutput,srcMask,isTraining);if err!=nil{return nil,fmt.Errorf("dec CrossAttn: %w",err)}
+	crossAttnOut,err=dl.Dropout.Forward(crossAttnOut,isTraining);if err!=nil{return nil,fmt.Errorf("dec CrossAttnDrop: %w",err)}
+    residual2,err=Add(residual1,crossAttnOut);if err!=nil{return nil,fmt.Errorf("dec Res2: %w",err)}
+    norm_output_for_ffn,err=dl.Norm3.Forward(residual2);if err!=nil{return nil,fmt.Errorf("dec Norm3: %w",err)}
+    if dl.IsMoE{
+		if dl.MoELayer==nil{return nil,fmt.Errorf("dec MoELayer nil")};sublayer_output,err=dl.MoELayer.Forward(norm_output_for_ffn,isTraining);if err!=nil{return nil,fmt.Errorf("dec MoE fwd: %w",err)}
+    }else{
+		if dl.FeedForward==nil{return nil,fmt.Errorf("dec FFN nil")};sublayer_output,err=dl.FeedForward.Forward(norm_output_for_ffn,isTraining);if err!=nil{return nil,fmt.Errorf("dec FFN fwd: %w",err)}
+    }
+	sublayer_output,err=dl.Dropout.Forward(sublayer_output,isTraining);if err!=nil{return nil,fmt.Errorf("dec FFNDropout: %w",err)}
+    finalResidual,err=Add(residual2,sublayer_output);if err!=nil{return nil,fmt.Errorf("dec Res3: %w",err)}
+    return finalResidual,nil
 }
 
-// Embed converts token indices to embeddings with tensor-based parameters
-func (t *TransformerWithTensors) Embed(indices []int) *Tensor {
-	result := NewZerosTensor(len(indices), t.EmbeddingDim, true)
-	
-	for i, idx := range indices {
-		if idx >= 0 && idx < t.VocabSize {
-			for j := 0; j < t.EmbeddingDim; j++ {
-				result.Data.Data[i][j] = t.EmbeddingMatrix.Data.Data[idx][j]
-			}
-		}
-	}
-	
-	return result
+// Forward methods for sub-components (MHA, FFN, LN) made graph-aware
+func (mha *MultiHeadAttentionWithTensors) Forward(query, key, value *Tensor, mask *Tensor, isTraining bool) (*Tensor, error) {
+	var qFull, kFull, vFull, err = MatMul(query,mha.QueryWeight); if err!=nil{return nil,fmt.Errorf("mha query proj: %w",err)}; kFull,err=MatMul(key,mha.KeyWeight); if err!=nil{return nil,fmt.Errorf("mha key proj: %w",err)}; vFull,err=MatMul(value,mha.ValueWeight); if err!=nil{return nil,fmt.Errorf("mha value proj: %w",err)}
+	hOutputs:=make([]*Tensor,0,mha.NumHeads); var opErr error
+	for h:=0;h<mha.NumHeads;h++{
+		sC:=h*mha.HeadDim; pfx:=fmt.Sprintf("%s_h%d",query.Name,h)
+		qH,e:=SliceColsTensor(qFull,sC,mha.HeadDim,pfx+"_q");if e!=nil{opErr=e;break}; kH,e:=SliceColsTensor(kFull,sC,mha.HeadDim,pfx+"_k");if e!=nil{opErr=e;break}; vH,e:=SliceColsTensor(vFull,sC,mha.HeadDim,pfx+"_v");if e!=nil{opErr=e;break}
+		kT,e:=TensorTranspose(kH);if e!=nil{opErr=e;break}; scr,e:=MatMul(qH,kT);if e!=nil{opErr=e;break}
+		scldScr,e:=ScalarMultiply(scr,1.0/math.Sqrt(float64(mha.HeadDim)));if e!=nil{opErr=e;break}
+		mskScr:=scldScr;if mask!=nil{mskScr,e=ApplyAttentionMaskTensor(scldScr,mask,-1e9,pfx+"_mskScr");if e!=nil{opErr=e;break}}
+		attW,e:=TensorSoftmax(mskScr,-1);if e!=nil{opErr=e;break}
+		if mha.AttentionDropout!=nil{attW,e=mha.AttentionDropout.Forward(attW,isTraining);if e!=nil{opErr=e;break}}
+		wVal,e:=MatMul(attW,vH);if e!=nil{opErr=e;break};hOutputs=append(hOutputs,wVal)
+	}; if opErr!=nil{return nil,opErr}; if len(hOutputs)==0&&mha.NumHeads>0{return nil,fmt.Errorf("no head outputs")}; if mha.NumHeads==0{return nil,fmt.Errorf("0 heads")}
+	var catOut *Tensor; if len(hOutputs)==1{catOut=hOutputs[0]}else{catOut,err=ConcatenateColsTensor(hOutputs,query.Name+"_cat_heads");if err!=nil{return nil,err}}
+	return MatMul(catOut,mha.OutputWeight)
 }
 
-// Forward processes input through the transformer model with tensor-based parameters
-func (t *TransformerWithTensors) Forward(srcIndices, tgtIndices []int) *Tensor {
-	// Convert token indices to embeddings
-	srcEmbeddings := t.Embed(srcIndices)
-	tgtEmbeddings := t.Embed(tgtIndices)
-	
-	// Add positional encoding
-	srcEmbeddings = t.AddPositionalEncoding(srcEmbeddings)
-	tgtEmbeddings = t.AddPositionalEncoding(tgtEmbeddings)
-	
-	// Process through encoder
-	var err error
-	encoderOutput := srcEmbeddings
-	for i, layer := range t.Encoder {
-		encoderOutput, err = layer.Forward(encoderOutput, true)
-		if err != nil {
-			// In a real scenario, might panic or return error if Forward itself could return error
-			// For now, assuming Forward might panic or this is a simplified error path
-			fmt.Printf("Error in encoder layer %d: %v\n", i, err) // Placeholder error handling
-			return nil // Or handle error more gracefully
-		}
-	}
-	
-	// Process through decoder
-	decoderOutput := tgtEmbeddings
-	for i, layer := range t.Decoder {
-		decoderOutput, err = layer.Forward(decoderOutput, encoderOutput, true)
-		if err != nil {
-			fmt.Printf("Error in decoder layer %d: %v\n", i, err) // Placeholder error handling
-			return nil // Or handle error more gracefully
-		}
-	}
-	
-	// Project to vocabulary size
-	// Assuming TensorMatMul is legacy or error is handled if necessary
-	logits, err := MatMul(decoderOutput, t.OutputMatrix)
-	if err != nil {
-		fmt.Printf("Error in final projection: %v\n", err) // Placeholder error handling
-		return nil
-	}
-	return logits
+func (ff *FeedForwardWithTensors) Forward(input *Tensor, isTraining bool) (*Tensor, error) {
+	var h, hDrop, output *Tensor; var err error
+	h, err = MatMul(input, ff.W1); if err != nil { return nil, fmt.Errorf("ffn w1 mul: %w", err)}
+	h, err = Add(h, ff.B1); if err != nil { return nil, fmt.Errorf("ffn b1 add: %w", err)}
+	if ff.Activation==nil{return nil,fmt.Errorf("FFN activation nil")}; h,err=ff.Activation(h); if err!=nil{return nil, fmt.Errorf("ffn activation: %w",err)}
+	hDrop,err=ff.Dropout.Forward(h,isTraining); if err!=nil{return nil, fmt.Errorf("ffn dropout: %w",err)}
+	output, err = MatMul(hDrop, ff.W2); if err != nil { return nil, fmt.Errorf("ffn w2 mul: %w", err)}
+	output, err = Add(output, ff.B2); if err != nil { return nil, fmt.Errorf("ffn b2 add: %w", err)}
+	return output, nil
 }
 
-// ForwardEval processes input through the transformer model without gradient tracking
-func (t *TransformerWithTensors) ForwardEval(srcIndices, tgtIndices []int) *Matrix {
-	// Convert token indices to embeddings
-	srcEmbeddings := t.Embed(srcIndices)
-	tgtEmbeddings := t.Embed(tgtIndices)
-	
-	// Add positional encoding
-	srcEmbeddings = t.AddPositionalEncoding(srcEmbeddings)
-	tgtEmbeddings = t.AddPositionalEncoding(tgtEmbeddings)
-	
-	// Process through encoder
-	var err error
-	encoderOutput := srcEmbeddings
-	for i, layer := range t.Encoder {
-		encoderOutput, err = layer.Forward(encoderOutput, false)
-		if err != nil {
-			fmt.Printf("Error in ForwardEval encoder layer %d: %v\n", i, err) // Placeholder
-			return nil // Or a zero matrix
-		}
-	}
-	
-	// Process through decoder
-	decoderOutput := tgtEmbeddings
-	for i, layer := range t.Decoder {
-		decoderOutput, err = layer.Forward(decoderOutput, encoderOutput, false)
-		if err != nil {
-			fmt.Printf("Error in ForwardEval decoder layer %d: %v\n", i, err) // Placeholder
-			return nil // Or a zero matrix
-		}
-	}
-	
-	// Project to vocabulary size
-	logits, err := MatMul(decoderOutput, t.OutputMatrix)
-	if err != nil {
-		fmt.Printf("Error in ForwardEval final projection: %v\n", err) // Placeholder
-		return nil
-	}
-	
-	// Apply softmax to get probabilities
-	probs, err := Softmax(logits) // Assuming Softmax is the tensor op from autodiff.go
-	if err != nil {
-		fmt.Printf("Error in ForwardEval softmax: %v\n", err) // Placeholder
-		return nil
-	}
-	
-	return probs.Data
-}
+func (ln *LayerNormWithTensors) Forward(input *Tensor) (*Tensor, error) {
+	epsT := NewScalarTensor(ln.Eps, input.Graph, false)
 
-// AddPositionalEncoding adds positional encoding to the input embeddings
-func (t *TransformerWithTensors) AddPositionalEncoding(embeddings *Tensor) *Tensor {
-	if embeddings.Data.Rows > t.PositionalEncoder.MaxLen {
-		panic("Input sequence length exceeds maximum length for positional encoding")
-	}
+	meanVal,e:=TensorMean(input,1,true); if e!=nil{return nil,fmt.Errorf("ln mean: %w",e)}
+	cenIn,e:=Subtract(input,meanVal); if e!=nil{return nil,fmt.Errorf("ln center: %w",e)}
+	sqIn,e:=TensorSquare(cenIn); if e!=nil{return nil,fmt.Errorf("ln square: %w",e)}
+	varV,e:=TensorMean(sqIn,1,true); if e!=nil{return nil,fmt.Errorf("ln variance: %w",e)}
+	stdVTemp,e:=Add(varV,epsT); if e!=nil{return nil,fmt.Errorf("ln add_eps: %w",e)}
+	stdV,e:=TensorSqrt(stdVTemp); if e!=nil{return nil,fmt.Errorf("ln sqrt: %w",e)}
+	normIn,e:=TensorDivide(cenIn,stdV); if e!=nil{return nil,fmt.Errorf("ln divide: %w",e)}
 	
-	result := NewZerosTensor(embeddings.Data.Rows, embeddings.Data.Cols, embeddings.Requires)
-	
-	for i := 0; i < embeddings.Data.Rows; i++ {
-		for j := 0; j < embeddings.Data.Cols; j++ {
-			result.Data.Data[i][j] = embeddings.Data.Data[i][j] + t.PositionalEncoder.Encoding.Data[i][j]
-		}
-	}
-	
-	return result
-}
-
-// GetParameters returns all trainable parameters of the transformer model
-func (t *TransformerWithTensors) GetParameters() map[string]*Tensor {
-	params := make(map[string]*Tensor)
-	
-	// Embedding and output matrices
-	params["embedding_matrix"] = t.EmbeddingMatrix
-	params["output_matrix"] = t.OutputMatrix
-	
-	// Encoder parameters
-	if t.Config.UseCrossLayerParameterSharing && len(t.Encoder) > 0 {
-		sharedEncoderLayer := t.Encoder[0]
-		params["shared_encoder_self_query"] = sharedEncoderLayer.SelfAttention.QueryWeight
-		params["shared_encoder_self_key"] = sharedEncoderLayer.SelfAttention.KeyWeight
-		params["shared_encoder_self_value"] = sharedEncoderLayer.SelfAttention.ValueWeight
-		params["shared_encoder_self_output"] = sharedEncoderLayer.SelfAttention.OutputWeight
-		params["shared_encoder_norm1_gamma"] = sharedEncoderLayer.Norm1.Gamma
-		params["shared_encoder_norm1_beta"] = sharedEncoderLayer.Norm1.Beta
-		params["shared_encoder_norm2_gamma"] = sharedEncoderLayer.Norm2.Gamma
-		params["shared_encoder_norm2_beta"] = sharedEncoderLayer.Norm2.Beta
-		params["shared_encoder_ffn_w1"] = sharedEncoderLayer.FeedForward.W1
-		params["shared_encoder_ffn_b1"] = sharedEncoderLayer.FeedForward.B1
-		params["shared_encoder_ffn_w2"] = sharedEncoderLayer.FeedForward.W2
-		params["shared_encoder_ffn_b2"] = sharedEncoderLayer.FeedForward.B2
-	} else {
-		for i, layer := range t.Encoder {
-			params[fmt.Sprintf("encoder_%d_self_query", i)] = layer.SelfAttention.QueryWeight
-			params[fmt.Sprintf("encoder_%d_self_key", i)] = layer.SelfAttention.KeyWeight
-			params[fmt.Sprintf("encoder_%d_self_value", i)] = layer.SelfAttention.ValueWeight
-			params[fmt.Sprintf("encoder_%d_self_output", i)] = layer.SelfAttention.OutputWeight
-			params[fmt.Sprintf("encoder_%d_norm1_gamma", i)] = layer.Norm1.Gamma
-			params[fmt.Sprintf("encoder_%d_norm1_beta", i)] = layer.Norm1.Beta
-			params[fmt.Sprintf("encoder_%d_norm2_gamma", i)] = layer.Norm2.Gamma
-			params[fmt.Sprintf("encoder_%d_norm2_beta", i)] = layer.Norm2.Beta
-			params[fmt.Sprintf("encoder_%d_ffn_w1", i)] = layer.FeedForward.W1
-			params[fmt.Sprintf("encoder_%d_ffn_b1", i)] = layer.FeedForward.B1
-			params[fmt.Sprintf("encoder_%d_ffn_w2", i)] = layer.FeedForward.W2
-			params[fmt.Sprintf("encoder_%d_ffn_b2", i)] = layer.FeedForward.B2
-		}
-	}
-	
-	// Decoder parameters
-	if t.Config.UseCrossLayerParameterSharing && len(t.Decoder) > 0 {
-		sharedDecoderLayer := t.Decoder[0]
-		params["shared_decoder_self_query"] = sharedDecoderLayer.SelfAttention.QueryWeight
-		params["shared_decoder_self_key"] = sharedDecoderLayer.SelfAttention.KeyWeight
-		params["shared_decoder_self_value"] = sharedDecoderLayer.SelfAttention.ValueWeight
-		params["shared_decoder_self_output"] = sharedDecoderLayer.SelfAttention.OutputWeight
-		params["shared_decoder_cross_query"] = sharedDecoderLayer.CrossAttention.QueryWeight
-		params["shared_decoder_cross_key"] = sharedDecoderLayer.CrossAttention.KeyWeight
-		params["shared_decoder_cross_value"] = sharedDecoderLayer.CrossAttention.ValueWeight
-		params["shared_decoder_cross_output"] = sharedDecoderLayer.CrossAttention.OutputWeight
-		params["shared_decoder_norm1_gamma"] = sharedDecoderLayer.Norm1.Gamma
-		params["shared_decoder_norm1_beta"] = sharedDecoderLayer.Norm1.Beta
-		params["shared_decoder_norm2_gamma"] = sharedDecoderLayer.Norm2.Gamma
-		params["shared_decoder_norm2_beta"] = sharedDecoderLayer.Norm2.Beta
-		params["shared_decoder_norm3_gamma"] = sharedDecoderLayer.Norm3.Gamma
-		params["shared_decoder_norm3_beta"] = sharedDecoderLayer.Norm3.Beta
-		params["shared_decoder_ffn_w1"] = sharedDecoderLayer.FeedForward.W1
-		params["shared_decoder_ffn_b1"] = sharedDecoderLayer.FeedForward.B1
-		params["shared_decoder_ffn_w2"] = sharedDecoderLayer.FeedForward.W2
-		params["shared_decoder_ffn_b2"] = sharedDecoderLayer.FeedForward.B2
-	} else {
-		for i, layer := range t.Decoder {
-			params[fmt.Sprintf("decoder_%d_self_query", i)] = layer.SelfAttention.QueryWeight
-			params[fmt.Sprintf("decoder_%d_self_key", i)] = layer.SelfAttention.KeyWeight
-			params[fmt.Sprintf("decoder_%d_self_value", i)] = layer.SelfAttention.ValueWeight
-			params[fmt.Sprintf("decoder_%d_self_output", i)] = layer.SelfAttention.OutputWeight
-			params[fmt.Sprintf("decoder_%d_cross_query", i)] = layer.CrossAttention.QueryWeight
-			params[fmt.Sprintf("decoder_%d_cross_key", i)] = layer.CrossAttention.KeyWeight
-			params[fmt.Sprintf("decoder_%d_cross_value", i)] = layer.CrossAttention.ValueWeight
-			params[fmt.Sprintf("decoder_%d_cross_output", i)] = layer.CrossAttention.OutputWeight
-			params[fmt.Sprintf("decoder_%d_norm1_gamma", i)] = layer.Norm1.Gamma
-			params[fmt.Sprintf("decoder_%d_norm1_beta", i)] = layer.Norm1.Beta
-			params[fmt.Sprintf("decoder_%d_norm2_gamma", i)] = layer.Norm2.Gamma
-			params[fmt.Sprintf("decoder_%d_norm2_beta", i)] = layer.Norm2.Beta
-			params[fmt.Sprintf("decoder_%d_norm3_gamma", i)] = layer.Norm3.Gamma
-			params[fmt.Sprintf("decoder_%d_norm3_beta", i)] = layer.Norm3.Beta
-			params[fmt.Sprintf("decoder_%d_ffn_w1", i)] = layer.FeedForward.W1
-			params[fmt.Sprintf("decoder_%d_ffn_b1", i)] = layer.FeedForward.B1
-			params[fmt.Sprintf("decoder_%d_ffn_w2", i)] = layer.FeedForward.W2
-			params[fmt.Sprintf("decoder_%d_ffn_b2", i)] = layer.FeedForward.B2
-		}
-	}
-	
-	return params
+	scaled,e:=Multiply(normIn,ln.Gamma); if e!=nil{return nil,fmt.Errorf("ln scale: %w",e)}
+	return Add(scaled,ln.Beta)
 }
