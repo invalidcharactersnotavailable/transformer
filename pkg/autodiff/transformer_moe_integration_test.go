@@ -5,8 +5,8 @@ import (
 	"fmt"
 	// "math" // Not strictly needed for this test's assertions
 
-	"github.com/transformer_reorganized/pkg/core"
-	"github.com/transformer_reorganized/pkg/moe" // Required for model.GetMoELayers()
+	"transformer/pkg/core"
+	// MoE types are now in the autodiff package
 )
 
 // Helper to create a new graph for each test to ensure isolation (if not in a shared test util)

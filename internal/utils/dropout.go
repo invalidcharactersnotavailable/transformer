@@ -1,7 +1,8 @@
-package transformer
+package utils
 
 import (
 	"math/rand"
+	"fmt" // Added fmt import
 )
 
 // Dropout represents a dropout layer for regularization
@@ -18,13 +19,17 @@ func NewDropout(rate float64) *Dropout {
 }
 
 // Forward applies dropout to the input during training
-func (d *Dropout) Forward(input *Matrix, isTraining bool) *Matrix {
+func (d *Dropout) Forward(input *Matrix, isTraining bool) (*Matrix, error) { // Added error return
 	if !isTraining || d.Rate <= 0.0 {
-		return input
+		return input, nil // Return input and nil error
 	}
 	
 	// Create dropout mask
-	d.Mask = NewMatrix(input.Rows, input.Cols)
+	var err error
+	d.Mask, err = NewMatrix(input.Rows, input.Cols) // Handle error
+	if err != nil {
+		return nil, fmt.Errorf("failed to create mask matrix in dropout: %w", err)
+	}
 	
 	// Scale factor to maintain expected value
 	scale := 1.0 / (1.0 - d.Rate)
@@ -41,12 +46,21 @@ func (d *Dropout) Forward(input *Matrix, isTraining bool) *Matrix {
 	}
 	
 	// Apply mask
-	result := NewMatrix(input.Rows, input.Cols)
+	result, err := NewMatrix(input.Rows, input.Cols) // Handle error
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result matrix in dropout: %w", err)
+	}
 	for i := 0; i < input.Rows; i++ {
 		for j := 0; j < input.Cols; j++ {
 			result.Data[i][j] = input.Data[i][j] * d.Mask.Data[i][j]
 		}
 	}
 	
-	return result
+	return result, nil // Return result and nil error
+}
+
+// Clone creates a new Dropout layer with the same rate.
+// Note: The mask is not copied as it's stateful per forward pass.
+func (d *Dropout) Clone() *Dropout {
+	return NewDropout(d.Rate)
 }

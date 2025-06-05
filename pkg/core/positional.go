@@ -1,4 +1,7 @@
-package transformer
+package core
+
+/*
+All definitions moved to merged_positional.go or are obsolete.
 
 import (
 	"fmt"
@@ -414,3 +417,4 @@ func LegacyNewRotaryPositionalEncoding(dim, maxLen int) *PositionalEncoding {
 	pe, _ := NewRotaryPositionalEncoding(dim, maxLen)
 	return pe
 }
+*/

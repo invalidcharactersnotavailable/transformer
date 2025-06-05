@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/transformer_reorganized/pkg/autodiff"
-	"github.com/transformer_reorganized/pkg/core"
-	"tokenizer"
+	"transformer/pkg/autodiff"
+	"transformer/pkg/core"
+	"transformer/internal/tokenizer"
 )
 
 // Main entry point for the reorganized transformer library

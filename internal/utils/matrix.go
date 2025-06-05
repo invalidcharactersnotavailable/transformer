@@ -1,4 +1,4 @@
-package transformer
+package utils
 
 import (
 	"fmt"
@@ -39,6 +39,20 @@ func MustNewMatrix(rows, cols int) *Matrix {
 		panic(err)
 	}
 	return m
+}
+
+// NewOnesMatrix creates a new matrix initialized with all 1s.
+func NewOnesMatrix(rows, cols int) (*Matrix, error) {
+	m, err := NewMatrix(rows, cols)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < rows; i++ {
+		for j := 0; j < cols; j++ {
+			m.Data[i][j] = 1.0
+		}
+	}
+	return m, nil
 }
 
 // NewRandomMatrix creates a new matrix with random values

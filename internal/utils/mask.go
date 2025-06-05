@@ -1,4 +1,6 @@
-package transformer
+package utils
+
+import "fmt" // Added fmt import
 
 // AttentionMask represents a mask for controlling attention flow
 type AttentionMask struct {
@@ -6,8 +8,11 @@ type AttentionMask struct {
 }
 
 // NewPaddingMask creates a mask for padding tokens
-func NewPaddingMask(seqLen int, validLengths []int) *AttentionMask {
-	mask := NewMatrix(len(validLengths), seqLen)
+func NewPaddingMask(seqLen int, validLengths []int) (*AttentionMask, error) { // Added error return
+	mask, err := NewMatrix(len(validLengths), seqLen) // Handle error
+	if err != nil {
+		return nil, fmt.Errorf("failed to create mask matrix in NewPaddingMask: %w", err)
+	}
 	
 	// Set 1.0 for valid positions, 0.0 for padding
 	for i, validLen := range validLengths {
@@ -20,12 +25,15 @@ func NewPaddingMask(seqLen int, validLengths []int) *AttentionMask {
 		}
 	}
 	
-	return &AttentionMask{Mask: mask}
+	return &AttentionMask{Mask: mask}, nil // Return nil error
 }
 
 // NewCausalMask creates a causal (future-blinding) mask for decoder
-func NewCausalMask(seqLen int) *AttentionMask {
-	mask := NewMatrix(seqLen, seqLen)
+func NewCausalMask(seqLen int) (*AttentionMask, error) { // Added error return
+	mask, err := NewMatrix(seqLen, seqLen) // Handle error
+	if err != nil {
+		return nil, fmt.Errorf("failed to create mask matrix in NewCausalMask: %w", err)
+	}
 	
 	// Set 1.0 for positions that can be attended to (lower triangle)
 	for i := 0; i < seqLen; i++ {
@@ -38,12 +46,15 @@ func NewCausalMask(seqLen int) *AttentionMask {
 		}
 	}
 	
-	return &AttentionMask{Mask: mask}
+	return &AttentionMask{Mask: mask}, nil // Return nil error
 }
 
 // ApplyMask applies the attention mask to attention scores
-func (am *AttentionMask) ApplyMask(scores *Matrix) *Matrix {
-	result := NewMatrix(scores.Rows, scores.Cols)
+func (am *AttentionMask) ApplyMask(scores *Matrix) (*Matrix, error) { // Added error return
+	result, err := NewMatrix(scores.Rows, scores.Cols) // Handle error
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result matrix in ApplyMask: %w", err)
+	}
 	
 	for i := 0; i < scores.Rows; i++ {
 		for j := 0; j < scores.Cols; j++ {
@@ -57,5 +68,5 @@ func (am *AttentionMask) ApplyMask(scores *Matrix) *Matrix {
 		}
 	}
 	
-	return result
+	return result, nil // Return nil error
 }

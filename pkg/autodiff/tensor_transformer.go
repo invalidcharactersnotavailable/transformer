@@ -5,8 +5,8 @@ import (
 	"math"
 	"math/rand"
 
-	"github.com/transformer_reorganized/pkg/core"
-	"github.com/transformer_reorganized/pkg/moe"
+	"transformer/pkg/core"
+	// MoE types are now in the autodiff package
 )
 
 // TransformerWithTensors structure
@@ -30,7 +30,7 @@ func NewTransformerWithTensors(config *core.Config, graph *ComputationGraph) *Tr
 	// Populate MoELayerConfig from core.Config
 	// Note: RouterZLossCoeff and LoadBalanceLossCoeff are now part of MoELayerConfig itself.
 	// They will be passed from TensorFineTuningConfig to core.Config, then to MoELayerConfig.
-	moeLayerConf := moe.MoELayerConfig{
+	moeLayerConf := MoELayerConfig{ // moe. prefix removed
 		ModelDim:             config.EmbeddingDim,
 		NumExperts:           config.MoENumExperts,
 		HiddenDim:            config.MoEHiddenDim,
@@ -81,9 +81,9 @@ func NewTransformerWithTensors(config *core.Config, graph *ComputationGraph) *Tr
 type EncoderLayerWithTensors struct {
 	SelfAttention *MultiHeadAttentionWithTensors; FeedForward *FeedForwardWithTensors
 	Norm1 *LayerNormWithTensors; Norm2 *LayerNormWithTensors; Dropout *DropoutTensor
-	MoELayer *moe.MoELayer; IsMoE bool; Graph *ComputationGraph
+	MoELayer *MoELayer; IsMoE bool; Graph *ComputationGraph // moe. prefix removed
 }
-func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig moe.MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *EncoderLayerWithTensors {
+func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *EncoderLayerWithTensors { // moe. prefix removed
 	el := &EncoderLayerWithTensors{
 		SelfAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim, config.NumHeads, dropoutRate, requiresGrad, graph),
 		Norm1:         NewLayerNormWithTensors(config.EmbeddingDim, requiresGrad, graph),
@@ -108,7 +108,7 @@ func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE
 			// Default MoE expert activation can be same as standard FFN or specific
 			moeConfig.Activation = ffActivationFunc // Or a specific MoE default like GELU
 		}
-		el.MoELayer = moe.NewMoELayer(moeConfig, requiresGrad, graph); el.FeedForward = nil
+		el.MoELayer = NewMoELayer(moeConfig, requiresGrad, graph); el.FeedForward = nil // moe. prefix removed
 	} else {
 		el.FeedForward = NewFeedForwardWithTensors(config.EmbeddingDim, config.FFNHiddenDim, dropoutRate, ffActivationFunc, requiresGrad, graph); el.MoELayer = nil
 	}
@@ -119,9 +119,9 @@ func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE
 type DecoderLayerWithTensors struct {
 	SelfAttention *MultiHeadAttentionWithTensors; CrossAttention *MultiHeadAttentionWithTensors
 	FeedForward *FeedForwardWithTensors; Norm1 *LayerNormWithTensors; Norm2 *LayerNormWithTensors; Norm3 *LayerNormWithTensors
-	Dropout *DropoutTensor; MoELayer *moe.MoELayer; IsMoE bool; Graph *ComputationGraph
+	Dropout *DropoutTensor; MoELayer *MoELayer; IsMoE bool; Graph *ComputationGraph // moe. prefix removed
 }
-func NewDecoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig moe.MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *DecoderLayerWithTensors {
+func NewDecoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *DecoderLayerWithTensors { // moe. prefix removed
 	dl := &DecoderLayerWithTensors{
 		SelfAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim,config.NumHeads,dropoutRate,requiresGrad,graph), CrossAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim,config.NumHeads,dropoutRate,requiresGrad,graph),
 		Norm1: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph), Norm2: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph), Norm3: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph),
@@ -140,7 +140,7 @@ func NewDecoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE
 	if useMoE {
 		moeConfig.ModelDim = config.EmbeddingDim
 		if moeConfig.Activation == nil { moeConfig.Activation = ffActivationFunc }
-		dl.MoELayer = moe.NewMoELayer(moeConfig, requiresGrad, graph); dl.FeedForward = nil
+		dl.MoELayer = NewMoELayer(moeConfig, requiresGrad, graph); dl.FeedForward = nil // moe. prefix removed
 	} else {
 		dl.FeedForward = NewFeedForwardWithTensors(config.EmbeddingDim,config.FFNHiddenDim,dropoutRate,ffActivationFunc,requiresGrad,graph); dl.MoELayer = nil
 	}
@@ -254,8 +254,8 @@ func (t *TransformerWithTensors) Forward(srcIndicesTensor, tgtIndicesTensor *Ten
 }
 
 // GetMoELayers and GetParameters methods (assuming unchanged)
-func (t *TransformerWithTensors) GetMoELayers() []*moe.MoELayer { /* ... */
-	ls := []*moe.MoELayer{}; for _, l := range t.Encoder { if l.IsMoE && l.MoELayer != nil { ls = append(ls, l.MoELayer) } }; for _, l := range t.Decoder { if l.IsMoE && l.MoELayer != nil { ls = append(ls, l.MoELayer) } }; return ls
+func (t *TransformerWithTensors) GetMoELayers() []*MoELayer { /* ... */ // moe. prefix removed
+	ls := []*MoELayer{}; for _, l := range t.Encoder { if l.IsMoE && l.MoELayer != nil { ls = append(ls, l.MoELayer) } }; for _, l := range t.Decoder { if l.IsMoE && l.MoELayer != nil { ls = append(ls, l.MoELayer) } }; return ls // moe. prefix removed
 }
 func (t *TransformerWithTensors) GetParameters() []*Tensor { /* ... */
 	pm:=make(map[*Tensor]bool);ap:=[]*Tensor{};addP:=func(p*Tensor){if p!=nil&&p.RequiresGrad&&!pm[p]{ap=append(ap,p);pm[p]=true}};addPS:=func(ps[]*Tensor){for _,p:=range ps{addP(p)}}
@@ -273,8 +273,7 @@ func (t *TransformerWithTensors) GetNamedParameters() map[string]*Tensor { /* ..
 }
 
 // Fallbacks and Component GetParameters (assuming unchanged)
-func NewRandomTensorFallback(r,c int, cfg *TensorConfig) *Tensor { t,_:=NewRandomTensor(r,c,cfg); return t }
-func NewZerosTensorFallback(r,c int, cfg *TensorConfig) *Tensor { t,_:= NewZerosTensor(cfg, r,c); return t }
+// NewRandomTensorFallback and NewZerosTensorFallback are defined in moe_components.go (package autodiff)
 func (e *EmbeddingTensor) GetParameters() []*Tensor { if e.Weights!=nil&&e.Weights.RequiresGrad{return[]*Tensor{e.Weights}}; return[]*Tensor{} }
 func (pe *PositionalEncodingTensor) GetParameters() []*Tensor { return []*Tensor{} }
 func (el *EncoderLayerWithTensors) GetParameters() []*Tensor { ps:=el.SelfAttention.GetParameters();if el.IsMoE{if el.MoELayer!=nil{ps=append(ps,el.MoELayer.GetParameters()...)}}else{if el.FeedForward!=nil{ps=append(ps,el.FeedForward.GetParameters()...)}};ps=append(ps,el.Norm1.GetParameters()...);ps=append(ps,el.Norm2.GetParameters()...);return ps }

@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/transformer_reorganized/internal/tokenizer"
-	"github.com/transformer_reorganized/pkg/moe"
+	"transformer/internal/tokenizer"
+	// MoE types are now in the autodiff package
 )
 
 // TensorFineTuningConfig contains configuration for tensor-based fine-tuning
@@ -102,7 +102,7 @@ type GradientFineTuner struct {
 	Model       *TransformerWithTensors; Config      *TensorFineTuningConfig
 	Optimizer   interface{}; StepCount   int; BestLoss    float64
 	Serializer  *TensorModelSerializer; Parameters  map[string]*Tensor
-	Tokenizer   *tokenizer.Tokenizer
+	Tokenizer   tokenizer.Tokenizer // Changed to use the interface type directly
 }
 
 // NewGradientFineTuner constructor

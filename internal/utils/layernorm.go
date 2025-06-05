@@ -1,7 +1,8 @@
-package transformer
+package utils
 
 import (
 	"math"
+	"fmt" // Added fmt import
 )
 
 // LayerNorm represents a layer normalization component
@@ -13,9 +14,15 @@ type LayerNorm struct {
 }
 
 // NewLayerNorm creates a new layer normalization component
-func NewLayerNorm(dim int) *LayerNorm {
-	gamma := NewMatrix(1, dim)
-	beta := NewMatrix(1, dim)
+func NewLayerNorm(dim int) (*LayerNorm, error) { // Added error return
+	gamma, err := NewMatrix(1, dim) // Handle error
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gamma matrix in layernorm: %w", err)
+	}
+	beta, err := NewMatrix(1, dim) // Handle error
+	if err != nil {
+		return nil, fmt.Errorf("failed to create beta matrix in layernorm: %w", err)
+	}
 	
 	// Initialize gamma to ones and beta to zeros
 	for i := 0; i < dim; i++ {
@@ -28,12 +35,15 @@ func NewLayerNorm(dim int) *LayerNorm {
 		Epsilon: 1e-5,
 		Gamma:   gamma,
 		Beta:    beta,
-	}
+	}, nil // Return nil error
 }
 
 // Forward applies layer normalization to the input
-func (ln *LayerNorm) Forward(input *Matrix) *Matrix {
-	output := NewMatrix(input.Rows, input.Cols)
+func (ln *LayerNorm) Forward(input *Matrix) (*Matrix, error) { // Added error return
+	output, err := NewMatrix(input.Rows, input.Cols) // Handle error
+	if err != nil {
+		return nil, fmt.Errorf("failed to create output matrix in layernorm forward: %w", err)
+	}
 	
 	for i := 0; i < input.Rows; i++ {
 		// Calculate mean
@@ -58,5 +68,5 @@ func (ln *LayerNorm) Forward(input *Matrix) *Matrix {
 		}
 	}
 	
-	return output
+	return output, nil // Return nil error
 }

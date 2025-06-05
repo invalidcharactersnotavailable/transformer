@@ -1,8 +1,9 @@
-package transformer
+package core
 
 import (
 	"fmt"
 	"math"
+	"transformer/internal/utils" // Added utils import
 )
 
 // PositionalEncodingType represents the type of positional encoding to use
@@ -43,18 +44,18 @@ func DefaultPositionalEncodingConfig() *PositionalEncodingConfig {
 type PositionalEncoding struct {
 	Dim           int
 	MaxLen        int
-	Encoding      *Matrix
-	DropPE        *Dropout
+	Encoding      *utils.Matrix // Prefixed
+	DropPE        *utils.Dropout // Prefixed
 	Scale         float64
 	EncodingType  PositionalEncodingType
 	Learnable     bool
 	
 	// For rotary encoding
-	Cos           *Matrix
-	Sin           *Matrix
+	Cos           *utils.Matrix // Prefixed
+	Sin           *utils.Matrix // Prefixed
 	
 	// For learnable encoding
-	LearnableWeights *Matrix
+	LearnableWeights *utils.Matrix // Prefixed
 }
 
 // NewPositionalEncoding creates a new positional encoding with the specified configuration
@@ -75,10 +76,13 @@ func NewPositionalEncoding(config *PositionalEncodingConfig) (*PositionalEncodin
 		return nil, fmt.Errorf("dropout rate must be in range [0, 1), got %f", config.DropoutRate)
 	}
 	
+	// Note: utils.NewDropout now doesn't return error, if it did, this would need handling
+	dropPE := utils.NewDropout(config.DropoutRate)
+
 	pe := &PositionalEncoding{
 		Dim:          config.Dim,
 		MaxLen:       config.MaxLen,
-		DropPE:       NewDropout(config.DropoutRate),
+		DropPE:       dropPE, // Use the initialized one
 		Scale:        config.Scale,
 		EncodingType: config.EncodingType,
 		Learnable:    config.Learnable,
@@ -87,7 +91,7 @@ func NewPositionalEncoding(config *PositionalEncodingConfig) (*PositionalEncodin
 	// Initialize based on encoding type
 	switch config.EncodingType {
 	case SinusoidalEncoding:
-		encoding, err := NewMatrix(config.MaxLen, config.Dim)
+		encoding, err := utils.NewMatrix(config.MaxLen, config.Dim) // Prefixed
 		if err != nil {
 			return nil, fmt.Errorf("failed to create encoding matrix: %v", err)
 		}
@@ -116,12 +120,12 @@ func NewPositionalEncoding(config *PositionalEncodingConfig) (*PositionalEncodin
 			return nil, fmt.Errorf("dimension must be even for rotary encoding, got %d", config.Dim)
 		}
 		
-		cos, err := NewMatrix(config.MaxLen, config.Dim/2)
+		cos, err := utils.NewMatrix(config.MaxLen, config.Dim/2) // Prefixed
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cos matrix: %v", err)
 		}
 		
-		sin, err := NewMatrix(config.MaxLen, config.Dim/2)
+		sin, err := utils.NewMatrix(config.MaxLen, config.Dim/2) // Prefixed
 		if err != nil {
 			return nil, fmt.Errorf("failed to create sin matrix: %v", err)
 		}
@@ -139,7 +143,7 @@ func NewPositionalEncoding(config *PositionalEncodingConfig) (*PositionalEncodin
 		
 	case LearnableEncoding:
 		// Initialize learnable weights with small random values
-		weights, err := NewRandomMatrix(config.MaxLen, config.Dim)
+		weights, err := utils.NewRandomMatrix(config.MaxLen, config.Dim) // Prefixed
 		if err != nil {
 			return nil, fmt.Errorf("failed to create learnable weights: %v", err)
 		}
@@ -202,7 +206,7 @@ func NewRotaryPositionalEncoding(dim, maxLen int) (*PositionalEncoding, error) {
 }
 
 // AddToEmbedding adds positional encoding to the input embeddings
-func (pe *PositionalEncoding) AddToEmbedding(embeddings *Matrix, isTraining bool) (*Matrix, error) {
+func (pe *PositionalEncoding) AddToEmbedding(embeddings *utils.Matrix, isTraining bool) (*utils.Matrix, error) { // Prefixed
 	if embeddings == nil {
 		return nil, fmt.Errorf("embeddings cannot be nil")
 	}
@@ -222,18 +226,18 @@ func (pe *PositionalEncoding) AddToEmbedding(embeddings *Matrix, isTraining bool
 		return pe.ApplyRotary(embeddings, embeddings.Rows)
 	}
 	
-	result, err := NewMatrix(embeddings.Rows, embeddings.Cols)
+	result, err := utils.NewMatrix(embeddings.Rows, embeddings.Cols) // Prefixed
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result matrix: %v", err)
 	}
 	
 	// Extract positional encodings for the current sequence length
-	var posEnc *Matrix
+	var posEnc *utils.Matrix // Prefixed
 	
 	if pe.EncodingType == LearnableEncoding {
 		// Use learnable weights
-		var err error
-		posEnc, err = NewMatrix(embeddings.Rows, embeddings.Cols)
+		// var err error // err already declared by result
+		posEnc, err = utils.NewMatrix(embeddings.Rows, embeddings.Cols) // Prefixed
 		if err != nil {
 			return nil, fmt.Errorf("failed to create position encoding matrix: %v", err)
 		}
@@ -245,8 +249,8 @@ func (pe *PositionalEncoding) AddToEmbedding(embeddings *Matrix, isTraining bool
 		}
 	} else {
 		// Use fixed sinusoidal encoding
-		var err error
-		posEnc, err = NewMatrix(embeddings.Rows, embeddings.Cols)
+		// var err error // err already declared by result
+		posEnc, err = utils.NewMatrix(embeddings.Rows, embeddings.Cols) // Prefixed
 		if err != nil {
 			return nil, fmt.Errorf("failed to create position encoding matrix: %v", err)
 		}
@@ -260,10 +264,11 @@ func (pe *PositionalEncoding) AddToEmbedding(embeddings *Matrix, isTraining bool
 	
 	// Apply dropout to positional encoding if training
 	if isTraining && pe.DropPE.Rate > 0 {
-		posEnc = pe.DropPE.Forward(posEnc, isTraining)
-		if posEnc == nil {
-			return nil, fmt.Errorf("dropout operation failed")
+		posEncWithDropout, errDropout := pe.DropPE.Forward(posEnc, isTraining) // utils.Dropout.Forward now returns error
+		if errDropout != nil {
+			return nil, fmt.Errorf("dropout on posEnc failed: %w", errDropout)
 		}
+		posEnc = posEncWithDropout
 	}
 	
 	// Scale positional encoding if needed
@@ -286,7 +291,7 @@ func (pe *PositionalEncoding) AddToEmbedding(embeddings *Matrix, isTraining bool
 }
 
 // ApplyRotary applies rotary position embeddings to input tensors
-func (pe *PositionalEncoding) ApplyRotary(x *Matrix, seqLen int) (*Matrix, error) {
+func (pe *PositionalEncoding) ApplyRotary(x *utils.Matrix, seqLen int) (*utils.Matrix, error) { // Prefixed
 	if x == nil {
 		return nil, fmt.Errorf("input matrix cannot be nil")
 	}
@@ -304,7 +309,7 @@ func (pe *PositionalEncoding) ApplyRotary(x *Matrix, seqLen int) (*Matrix, error
 		return nil, fmt.Errorf("input dimension must be even for rotary encoding, got %d", x.Cols)
 	}
 	
-	result, err := NewMatrix(x.Rows, x.Cols)
+	result, err := utils.NewMatrix(x.Rows, x.Cols) // Prefixed
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result matrix: %v", err)
 	}
@@ -334,11 +339,11 @@ func (pe *PositionalEncoding) ApplyRotary(x *Matrix, seqLen int) (*Matrix, error
 }
 
 // AddToEmbeddingLegacy provides backward compatibility with the original API
-func (pe *PositionalEncoding) AddToEmbeddingLegacy(embeddings *Matrix) *Matrix {
+func (pe *PositionalEncoding) AddToEmbeddingLegacy(embeddings *utils.Matrix) *utils.Matrix { // Prefixed
 	result, err := pe.AddToEmbedding(embeddings, false)
 	if err != nil {
 		// In legacy mode, return a zero matrix on error
-		zeroMatrix, _ := NewMatrix(embeddings.Rows, embeddings.Cols)
+		zeroMatrix, _ := utils.NewMatrix(embeddings.Rows, embeddings.Cols) // Prefixed
 		return zeroMatrix
 	}
 	return result

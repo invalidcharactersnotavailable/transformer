@@ -2,7 +2,7 @@ package transformer
 
 import (
 	"fmt"
-	"sort"
+	// "sort" // Removed
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -829,7 +829,7 @@ func TrainBPE(texts []string, vocabSize int, options *TokenizerOptions) (*Tokeni
 	}
 	
 	// Add individual characters to vocabulary
-	for word, count := range wordCounts {
+	for word, _ := range wordCounts { // count replaced with _
 		if len([]rune(word)) == 1 {
 			if _, exists := vocab[word]; !exists {
 				vocab[word] = len(vocab)

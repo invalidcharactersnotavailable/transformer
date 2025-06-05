@@ -1,22 +1,25 @@
-package transformer
+package core
 
 import (
-	"math"
+	// "math" // Removed unused import
+	"fmt" // Added fmt import
+	"transformer/internal/utils" // Added utils import
 )
 
 // EnhancedPositionalEncoding represents an advanced positional encoding with more options
 type EnhancedPositionalEncoding struct {
 	Dim       int
 	MaxLen    int
-	Encoding  *Matrix
-	DropPE    *Dropout
+	Encoding  *utils.Matrix // Prefixed with utils.
+	DropPE    *utils.Dropout // Prefixed with utils.
 	Scale     float64
 	Learnable bool
 }
 
-// NewEnhancedPositionalEncoding creates a new enhanced positional encoding
+// NewEnhancedPositionalEncoding is defined in merged_positional.go
+/*
 func NewEnhancedPositionalEncoding(dim, maxLen int, scale float64, dropoutRate float64, learnable bool) *EnhancedPositionalEncoding {
-	encoding := NewMatrix(maxLen, dim)
+// 	encoding := utils.NewMatrix(maxLen, dim) // Prefixed with utils.
 	
 	// Initialize with sinusoidal encoding
 	for pos := 0; pos < maxLen; pos++ {
@@ -44,29 +47,39 @@ func NewEnhancedPositionalEncoding(dim, maxLen int, scale float64, dropoutRate f
 		Learnable: learnable,
 	}
 }
+*/
 
 // AddToEmbedding adds positional encoding to the input embeddings
-func (pe *EnhancedPositionalEncoding) AddToEmbedding(embeddings *Matrix, isTraining bool) *Matrix {
+func (pe *EnhancedPositionalEncoding) AddToEmbedding(embeddings *utils.Matrix, isTraining bool) (*utils.Matrix, error) { // Added error return, prefixed Matrix
 	if embeddings.Rows > pe.MaxLen {
-		panic("Input sequence length exceeds maximum length for positional encoding")
+		// Consider returning an error instead of panicking
+		return nil, fmt.Errorf("input sequence length (%d) exceeds maximum length (%d) for positional encoding", embeddings.Rows, pe.MaxLen)
 	}
 	
-	result := NewMatrix(embeddings.Rows, embeddings.Cols)
+	result, err := utils.NewMatrix(embeddings.Rows, embeddings.Cols) // Prefixed with utils.
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result matrix: %w", err)
+	}
 	
-	// Extract positional encodings for the current sequence length
-	posEnc := NewMatrix(embeddings.Rows, embeddings.Cols)
+	posEnc, err := utils.NewMatrix(embeddings.Rows, embeddings.Cols) // Prefixed with utils.
+	if err != nil {
+		return nil, fmt.Errorf("failed to create posEnc matrix: %w", err)
+	}
+
 	for i := 0; i < embeddings.Rows; i++ {
 		for j := 0; j < embeddings.Cols; j++ {
 			posEnc.Data[i][j] = pe.Encoding.Data[i][j]
 		}
 	}
 	
-	// Apply dropout to positional encoding if training
 	if isTraining && pe.DropPE.Rate > 0 {
-		posEnc = pe.DropPE.Forward(posEnc, isTraining)
+		posEncWithDropout, errDropout := pe.DropPE.Forward(posEnc, isTraining)
+		if errDropout != nil {
+			return nil, fmt.Errorf("dropout on posEnc failed: %w", errDropout)
+		}
+		posEnc = posEncWithDropout
 	}
 	
-	// Scale positional encoding if needed
 	if pe.Scale != 1.0 {
 		for i := 0; i < posEnc.Rows; i++ {
 			for j := 0; j < posEnc.Cols; j++ {
@@ -75,28 +88,28 @@ func (pe *EnhancedPositionalEncoding) AddToEmbedding(embeddings *Matrix, isTrain
 		}
 	}
 	
-	// Add to embeddings
 	for i := 0; i < embeddings.Rows; i++ {
 		for j := 0; j < embeddings.Cols; j++ {
 			result.Data[i][j] = embeddings.Data[i][j] + posEnc.Data[i][j]
 		}
 	}
 	
-	return result
+	return result, nil
 }
 
 // RotaryPositionalEncoding implements Rotary Position Embedding (RoPE)
 type RotaryPositionalEncoding struct {
 	Dim    int
 	MaxLen int
-	Cos    *Matrix
-	Sin    *Matrix
+	Cos    *utils.Matrix // Prefixed with utils.
+	Sin    *utils.Matrix // Prefixed with utils.
 }
 
-// NewRotaryPositionalEncoding creates a new rotary positional encoding
+// NewRotaryPositionalEncoding is defined in merged_positional.go
+/*
 func NewRotaryPositionalEncoding(dim, maxLen int) *RotaryPositionalEncoding {
-	cos := NewMatrix(maxLen, dim/2)
-	sin := NewMatrix(maxLen, dim/2)
+	cos := utils.NewMatrix(maxLen, dim/2) // Prefixed with utils.
+	sin := utils.NewMatrix(maxLen, dim/2) // Prefixed with utils.
 	
 	for pos := 0; pos < maxLen; pos++ {
 		for i := 0; i < dim/2; i++ {
@@ -113,36 +126,36 @@ func NewRotaryPositionalEncoding(dim, maxLen int) *RotaryPositionalEncoding {
 		Sin:    sin,
 	}
 }
+*/
 
 // ApplyRotary applies rotary position embeddings to query and key tensors
-func (rpe *RotaryPositionalEncoding) ApplyRotary(x *Matrix, seqLen int) *Matrix {
+func (rpe *RotaryPositionalEncoding) ApplyRotary(x *utils.Matrix, seqLen int) (*utils.Matrix, error) { // Added error return, prefixed Matrix
 	if seqLen > rpe.MaxLen {
-		panic("Sequence length exceeds maximum length for rotary encoding")
+		// Consider returning an error
+		return nil, fmt.Errorf("sequence length (%d) exceeds maximum length (%d) for rotary encoding", seqLen, rpe.MaxLen)
 	}
 	
-	result := NewMatrix(x.Rows, x.Cols)
+	result, err := utils.NewMatrix(x.Rows, x.Cols) // Prefixed with utils.
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result matrix for ApplyRotary: %w", err)
+	}
 	
-	// This is a simplified implementation of RoPE
-	// In a real implementation, we would apply complex rotation to pairs of dimensions
 	halfDim := x.Cols / 2
 	
 	for i := 0; i < x.Rows; i++ {
 		pos := i % seqLen
 		
 		for j := 0; j < halfDim; j++ {
-			// Apply rotation to each pair of dimensions
-			cos := rpe.Cos.Data[pos][j]
-			sin := rpe.Sin.Data[pos][j]
+			cosVal := rpe.Cos.Data[pos][j]
+			sinVal := rpe.Sin.Data[pos][j]
 			
-			// First half of the dimension
 			x1 := x.Data[i][j]
 			x2 := x.Data[i][j+halfDim]
 			
-			// Rotate using complex multiplication
-			result.Data[i][j] = x1*cos - x2*sin
-			result.Data[i][j+halfDim] = x1*sin + x2*cos
+			result.Data[i][j] = x1*cosVal - x2*sinVal
+			result.Data[i][j+halfDim] = x1*sinVal + x2*cosVal
 		}
 	}
 	
-	return result
+	return result, nil
 }
