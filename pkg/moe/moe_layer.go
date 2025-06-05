@@ -73,9 +73,8 @@ func (ml *MoELayer) Forward(inputTokens *autodiff.Tensor, isTraining bool) (*aut
 
 	topKRouterProbs, topKExpertIndices, err := autodiff.TensorTopK(routerProbs, ml.Config.TopK, 1, true)
 	if err != nil {
-		fmt.Printf("Error during TopK selection (K=%d): %v. MoE will be passthrough.\n", ml.Config.TopK, err)
 		ml.AuxiliaryLoss, _ = autodiff.NewTensor(autodiff.NewMatrixZeros(1,1), &autodiff.TensorConfig{Graph: graph, Name: "topk_err_aux_loss"})
-		return inputTokens, nil
+		return nil, fmt.Errorf("TensorTopK failed (K=%d): %w", ml.Config.TopK, err)
 	}
 
 	finalCombinedOutputConfig := &autodiff.TensorConfig{Graph: graph, RequiresGrad: inputTokens.RequiresGrad, Name: "moe_final_output"}
@@ -92,10 +91,10 @@ func (ml *MoELayer) Forward(inputTokens *autodiff.Tensor, isTraining bool) (*aut
 
 		for e := 0; e < ml.Config.NumExperts; e++ {
 			activeExpertMaskComparative, errEq := autodiff.TensorEqualScalar(currentExpertIndicesSlice, float64(e))
-			if errEq != nil { fmt.Printf("Error TensorEqualScalar expert %d, k_idx %d: %v\n", e, kIdx, errEq); continue }
+			if errEq != nil { return nil, fmt.Errorf("TensorEqualScalar failed for expert %d, k_idx %d: %w", e, kIdx, errEq) }
 
 			activeExpertMaskF, errCast := autodiff.TensorCast(activeExpertMaskComparative, autodiff.Float64)
-			if errCast != nil { fmt.Printf("Error TensorCast expert %d, k_idx %d: %v\n", e, kIdx, errCast); continue }
+			if errCast != nil { return nil, fmt.Errorf("TensorCast failed for expert %d, k_idx %d: %w", e, kIdx, errCast) }
 
 			if kIdx == 0 { // For LB Loss, only consider top-1 choice's mask for simplicity
 				if expertAssignmentMasksForLBLoss[e] == nil {
@@ -111,19 +110,19 @@ func (ml *MoELayer) Forward(inputTokens *autodiff.Tensor, isTraining bool) (*aut
 			}
 
 			currentExpertInput, errOp := autodiff.Multiply(inputTokens, activeExpertMaskF)
-			if errOp != nil { fmt.Printf("Error Multiply expert input expert %d, k_idx %d: %v\n", e, kIdx, errOp); continue }
+			if errOp != nil { return nil, fmt.Errorf("Multiply currentExpertInput failed for expert %d, k_idx %d: %w", e, kIdx, errOp) }
 
 			expertOutput, errOp := ml.Experts[e].Forward(currentExpertInput)
-			if errOp != nil { fmt.Printf("Error Expert %d Forward, k_idx %d: %v\n", e, kIdx, errOp); continue }
+			if errOp != nil { return nil, fmt.Errorf("Expert %d Forward failed for k_idx %d: %w", e, kIdx, errOp) }
 
 			gatingWeight, errOp := autodiff.Multiply(currentRouterProbsSlice, activeExpertMaskF)
-			if errOp != nil { fmt.Printf("Error Multiply gating weight expert %d, k_idx %d: %v\n", e, kIdx, errOp); continue }
+			if errOp != nil { return nil, fmt.Errorf("Multiply gatingWeight failed for expert %d, k_idx %d: %w", e, kIdx, errOp) }
 
 			weightedExpertOutput, errOp := autodiff.Multiply(expertOutput, gatingWeight)
-			if errOp != nil { fmt.Printf("Error Multiply weighted output expert %d, k_idx %d: %v\n", e, kIdx, errOp); continue }
+			if errOp != nil { return nil, fmt.Errorf("Multiply weightedExpertOutput failed for expert %d, k_idx %d: %w", e, kIdx, errOp) }
 
 			tempFinalCombinedOutput, errOp := autodiff.Add(finalCombinedOutput, weightedExpertOutput)
-			if errOp != nil { fmt.Printf("Error Add final output expert %d, k_idx %d: %v\n", e, kIdx, errOp); continue }
+			if errOp != nil { return nil, fmt.Errorf("Add tempFinalCombinedOutput failed for expert %d, k_idx %d: %w", e, kIdx, errOp) }
 			finalCombinedOutput = tempFinalCombinedOutput
 		}
 	}
@@ -138,19 +137,19 @@ func (ml *MoELayer) Forward(inputTokens *autodiff.Tensor, isTraining bool) (*aut
 		// Router Z-Loss (only if coefficient is positive)
 		if ml.Config.RouterZLossCoeff > 0 {
 			logSumExpRouterLogits, errLSE := autodiff.TensorLogSumExp(routerLogits, 1, false)
-			if errLSE != nil { fmt.Printf("Error LogSumExp for Router Z-Loss: %v.\n", errLSE)
+			if errLSE != nil { return nil, fmt.Errorf("TensorLogSumExp for Router Z-Loss failed: %w", errLSE)
 			} else {
 				squaredLogSumExp, errSq := autodiff.TensorSquare(logSumExpRouterLogits)
-				if errSq != nil { fmt.Printf("Error Square for Router Z-Loss: %v.\n", errSq)
+				if errSq != nil { return nil, fmt.Errorf("TensorSquare for Router Z-Loss failed: %w", errSq)
 				} else {
 					routerZLossValue, errMean := autodiff.TensorMean(squaredLogSumExp, -1, false)
-					if errMean != nil { fmt.Printf("Error Mean for Router Z-Loss: %v.\n", errMean)
+					if errMean != nil { return nil, fmt.Errorf("TensorMean for Router Z-Loss failed: %w", errMean)
 					} else {
 						routerZLoss, errMulS := autodiff.ScalarMultiply(routerZLossValue, ml.Config.RouterZLossCoeff)
-						if errMulS != nil { fmt.Printf("Error ScalarMultiply for Router Z-Loss: %v.\n", errMulS)
+						if errMulS != nil { return nil, fmt.Errorf("ScalarMultiply for Router Z-Loss failed: %w", errMulS)
 						} else {
 							var errAddAux error; totalAuxLoss, errAddAux = autodiff.Add(totalAuxLoss, routerZLoss)
-							if errAddAux != nil {fmt.Printf("Error adding ZLoss to TotalAuxLoss: %v\n", errAddAux)}
+							if errAddAux != nil { return nil, fmt.Errorf("failed to add Router Z-Loss to TotalAuxLoss: %w", errAddAux) }
 						}
 					}
 				}
@@ -161,7 +160,7 @@ func (ml *MoELayer) Forward(inputTokens *autodiff.Tensor, isTraining bool) (*aut
 		if ml.Config.LoadBalanceLossCoeff > 0 {
 			var P_i_tensor, f_i_tensor *autodiff.Tensor; var errLBLoss error
 			P_i_tensor, errLBLoss = autodiff.TensorMean(routerProbs, 0, false)
-			if errLBLoss != nil { fmt.Printf("Error calculating P_i for LB Loss: %v.\n", errLBLoss)
+			if errLBLoss != nil { return nil, fmt.Errorf("calculating P_i for Load Balancing Loss failed: %w", errLBLoss)
 			} else {
 				f_i_tensor = P_i_tensor // Default if cannot calculate f_i from masks
 
@@ -172,10 +171,10 @@ func (ml *MoELayer) Forward(inputTokens *autodiff.Tensor, isTraining bool) (*aut
 					for e := 0; e < ml.Config.NumExperts; e++ {
 						if expertAssignmentMasksForLBLoss[e] == nil { validFi = false; break }
 						sumMaskTensor, errSumMask := autodiff.TensorMean(expertAssignmentMasksForLBLoss[e], -1, false)
-						if errSumMask != nil { validFi = false; break }
+						if errSumMask != nil { return nil, fmt.Errorf("TensorMean for sumMaskTensor (LB Loss) failed for expert %d: %w", e, errSumMask) }
 
 						countTensorScaled, errScale := autodiff.ScalarMultiply(sumMaskTensor, float64(expertAssignmentMasksForLBLoss[e].Shape()[0]))
-						if errScale != nil {validFi = false; break }
+						if errScale != nil { return nil, fmt.Errorf("ScalarMultiply for countTensorScaled (LB Loss) failed for expert %d: %w", e, errScale) }
 						f_i_data_list[e] = countTensorScaled.Data()[0][0]
 					}
 
@@ -191,17 +190,17 @@ func (ml *MoELayer) Forward(inputTokens *autodiff.Tensor, isTraining bool) (*aut
 
 				if f_i_tensor != nil && P_i_tensor != nil { // Ensure both are valid before Multiply
 					products, errProd := autodiff.Multiply(f_i_tensor, P_i_tensor)
-					if errProd != nil { fmt.Printf("Error calculating products for LB Loss: %v.\n", errProd)
+					if errProd != nil { return nil, fmt.Errorf("calculating products for Load Balancing Loss failed: %w", errProd)
 					} else {
 						sumOverExperts, errSumProd := autodiff.TensorMean(products, -1, false)
-						if errSumProd != nil { fmt.Printf("Error summing products for LB Loss: %v.\n", errSumProd)
+						if errSumProd != nil { return nil, fmt.Errorf("summing products for Load Balancing Loss failed: %w", errSumProd)
 						} else {
 							finalLBCoeff := ml.Config.LoadBalanceLossCoeff * float64(ml.Config.NumExperts*ml.Config.NumExperts)
 							loadBalanceLossVal, errLBMul := autodiff.ScalarMultiply(sumOverExperts, finalLBCoeff)
-							if errLBMul != nil { fmt.Printf("Error ScalarMultiply for LB Loss: %v.\n", errLBMul)
+							if errLBMul != nil { return nil, fmt.Errorf("ScalarMultiply for Load Balancing Loss value failed: %w", errLBMul)
 							} else {
 								var addLBErr error; totalAuxLoss, addLBErr = autodiff.Add(totalAuxLoss, loadBalanceLossVal)
-								if addLBErr != nil { fmt.Printf("Error adding LB Loss to TotalAuxLoss: %v\n", addLBErr) }
+								if addLBErr != nil { return nil, fmt.Errorf("failed to add Load Balancing Loss to TotalAuxLoss: %w", addLBErr) }
 							}
 						}
 					}
