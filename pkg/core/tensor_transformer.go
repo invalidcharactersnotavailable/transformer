@@ -1,8 +1,23 @@
 package transformer
 
 import (
+	"fmt"
 	"math"
+	// "github.com/transformer_reorganized/pkg/moe" // Keep for now, might be used elsewhere or remove later if truly unused
+	// fmt is not used if LoadTransformerWithTensors is commented out.
 )
+
+// MoELayer represents a Mixture of Experts layer (simplified for core package)
+// This struct will eventually have its own parameters using pkg/core.Tensor
+type MoELayer struct {
+	// Example: Experts []*Expert // Where Expert is another local struct using pkg/core.Tensor
+	// For now, it's empty as per plan.
+}
+
+func (moeL *MoELayer) GetParameters() []*Tensor {
+	// Placeholder: In a real MoE, would collect parameters from experts and router
+	return []*Tensor{}
+}
 
 // TransformerWithTensors represents the complete transformer model with tensor-based parameters
 type TransformerWithTensors struct {
@@ -24,6 +39,27 @@ type EncoderLayerWithTensors struct {
 	DropoutAttention *Dropout
 	DropoutFFN       *Dropout
 	DropoutResidual  *Dropout
+	IsMoE            bool
+	MoELayer         *MoELayer // Changed to local type
+}
+
+func (el *EncoderLayerWithTensors) GetParameters() []*Tensor {
+	var params []*Tensor
+	if el.SelfAttention != nil {
+		params = append(params, el.SelfAttention.GetParameters()...)
+	}
+	if el.Norm1 != nil {
+		params = append(params, el.Norm1.GetParameters()...)
+	}
+	if el.Norm2 != nil {
+		params = append(params, el.Norm2.GetParameters()...)
+	}
+	if el.IsMoE && el.MoELayer != nil {
+		params = append(params, el.MoELayer.GetParameters()...)
+	} else if el.FeedForward != nil {
+		params = append(params, el.FeedForward.GetParameters()...)
+	}
+	return params
 }
 
 // DecoderLayerWithTensors represents a single decoder layer with tensor-based parameters
@@ -39,6 +75,33 @@ type DecoderLayerWithTensors struct {
 	DropoutFFN        *Dropout
 	DropoutResidual1  *Dropout
 	DropoutResidual2  *Dropout
+	IsMoE             bool
+	MoELayer          *MoELayer // Changed to local type
+}
+
+func (dl *DecoderLayerWithTensors) GetParameters() []*Tensor {
+	var params []*Tensor
+	if dl.SelfAttention != nil {
+		params = append(params, dl.SelfAttention.GetParameters()...)
+	}
+	if dl.CrossAttention != nil {
+		params = append(params, dl.CrossAttention.GetParameters()...)
+	}
+	if dl.Norm1 != nil {
+		params = append(params, dl.Norm1.GetParameters()...)
+	}
+	if dl.Norm2 != nil {
+		params = append(params, dl.Norm2.GetParameters()...)
+	}
+	if dl.Norm3 != nil {
+		params = append(params, dl.Norm3.GetParameters()...)
+	}
+	if dl.IsMoE && dl.MoELayer != nil {
+		params = append(params, dl.MoELayer.GetParameters()...)
+	} else if dl.FeedForward != nil {
+		params = append(params, dl.FeedForward.GetParameters()...)
+	}
+	return params
 }
 
 // MultiHeadAttentionWithTensors represents a multi-head attention mechanism with tensor-based parameters
@@ -52,6 +115,23 @@ type MultiHeadAttentionWithTensors struct {
 	OutputWeight *Tensor
 }
 
+func (mha *MultiHeadAttentionWithTensors) GetParameters() []*Tensor {
+	params := []*Tensor{}
+	if mha.QueryWeight != nil {
+		params = append(params, mha.QueryWeight)
+	}
+	if mha.KeyWeight != nil {
+		params = append(params, mha.KeyWeight)
+	}
+	if mha.ValueWeight != nil {
+		params = append(params, mha.ValueWeight)
+	}
+	if mha.OutputWeight != nil {
+		params = append(params, mha.OutputWeight)
+	}
+	return params
+}
+
 // FeedForwardWithTensors represents a feed-forward neural network with tensor-based parameters
 type FeedForwardWithTensors struct {
 	InputDim  int
@@ -62,6 +142,23 @@ type FeedForwardWithTensors struct {
 	B2        *Tensor
 }
 
+func (ffn *FeedForwardWithTensors) GetParameters() []*Tensor {
+	params := []*Tensor{}
+	if ffn.W1 != nil {
+		params = append(params, ffn.W1)
+	}
+	if ffn.B1 != nil {
+		params = append(params, ffn.B1)
+	}
+	if ffn.W2 != nil {
+		params = append(params, ffn.W2)
+	}
+	if ffn.B2 != nil {
+		params = append(params, ffn.B2)
+	}
+	return params
+}
+
 // LayerNormWithTensors represents layer normalization with tensor-based parameters
 type LayerNormWithTensors struct {
 	Dim    int
@@ -70,18 +167,31 @@ type LayerNormWithTensors struct {
 	Eps    float64
 }
 
+func (ln *LayerNormWithTensors) GetParameters() []*Tensor {
+	params := []*Tensor{}
+	if ln.Gamma != nil {
+		params = append(params, ln.Gamma)
+	}
+	if ln.Beta != nil {
+		params = append(params, ln.Beta)
+	}
+	return params
+}
+
 // NewTransformerWithTensors creates a new transformer model with tensor-based parameters
 func NewTransformerWithTensors(vocabSize, embeddingDim, numLayers, numHeads, ffnHiddenDim, maxLen int) *TransformerWithTensors {
 	// Create encoder layers
 	encoder := make([]*EncoderLayerWithTensors, numLayers)
 	for i := 0; i < numLayers; i++ {
-		encoder[i] = NewEncoderLayerWithTensors(embeddingDim, ffnHiddenDim, numHeads)
+		// Defaulting useMoE to false for now
+		encoder[i] = NewEncoderLayerWithTensors(embeddingDim, ffnHiddenDim, numHeads, false)
 	}
 	
 	// Create decoder layers
 	decoder := make([]*DecoderLayerWithTensors, numLayers)
 	for i := 0; i < numLayers; i++ {
-		decoder[i] = NewDecoderLayerWithTensors(embeddingDim, ffnHiddenDim, numHeads)
+		// Defaulting useMoE to false for now
+		decoder[i] = NewDecoderLayerWithTensors(embeddingDim, ffnHiddenDim, numHeads, false)
 	}
 	
 	return &TransformerWithTensors{
@@ -96,24 +206,31 @@ func NewTransformerWithTensors(vocabSize, embeddingDim, numLayers, numHeads, ffn
 }
 
 // NewEncoderLayerWithTensors creates a new encoder layer with tensor-based parameters
-func NewEncoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *EncoderLayerWithTensors {
-	return &EncoderLayerWithTensors{
+func NewEncoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int, useMoE bool) *EncoderLayerWithTensors {
+	el := &EncoderLayerWithTensors{
 		SelfAttention:    NewMultiHeadAttentionWithTensors(numHeads, modelDim),
-		FeedForward:      NewFeedForwardWithTensors(modelDim, ffnHiddenDim),
 		Norm1:            NewLayerNormWithTensors(modelDim),
 		Norm2:            NewLayerNormWithTensors(modelDim),
 		DropoutAttention: NewDropout(0.1),
 		DropoutFFN:       NewDropout(0.1),
 		DropoutResidual:  NewDropout(0.1),
+		IsMoE:            useMoE,
 	}
+	if useMoE {
+		el.MoELayer = &MoELayer{} // Changed to local type
+		el.FeedForward = nil
+	} else {
+		el.FeedForward = NewFeedForwardWithTensors(modelDim, ffnHiddenDim)
+		el.MoELayer = nil
+	}
+	return el
 }
 
 // NewDecoderLayerWithTensors creates a new decoder layer with tensor-based parameters
-func NewDecoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *DecoderLayerWithTensors {
-	return &DecoderLayerWithTensors{
+func NewDecoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int, useMoE bool) *DecoderLayerWithTensors {
+	dl := &DecoderLayerWithTensors{
 		SelfAttention:     NewMultiHeadAttentionWithTensors(numHeads, modelDim),
 		CrossAttention:    NewMultiHeadAttentionWithTensors(numHeads, modelDim),
-		FeedForward:       NewFeedForwardWithTensors(modelDim, ffnHiddenDim),
 		Norm1:             NewLayerNormWithTensors(modelDim),
 		Norm2:             NewLayerNormWithTensors(modelDim),
 		Norm3:             NewLayerNormWithTensors(modelDim),
@@ -122,7 +239,16 @@ func NewDecoderLayerWithTensors(modelDim, ffnHiddenDim, numHeads int) *DecoderLa
 		DropoutFFN:        NewDropout(0.1),
 		DropoutResidual1:  NewDropout(0.1),
 		DropoutResidual2:  NewDropout(0.1),
+		IsMoE:             useMoE,
 	}
+	if useMoE {
+		dl.MoELayer = &MoELayer{} // Changed to local type
+		dl.FeedForward = nil
+	} else {
+		dl.FeedForward = NewFeedForwardWithTensors(modelDim, ffnHiddenDim)
+		dl.MoELayer = nil
+	}
+	return dl
 }
 
 // NewMultiHeadAttentionWithTensors creates a new multi-head attention layer with tensor-based parameters
@@ -496,101 +622,95 @@ func (t *TransformerWithTensors) AddPositionalEncoding(embeddings *Tensor) *Tens
 	return result
 }
 
-// GetParameters returns all trainable parameters of the transformer model
-func (t *TransformerWithTensors) GetParameters() map[string]*Tensor {
-	params := make(map[string]*Tensor)
-	
+// GetParameters returns all trainable parameters of the transformer model as a slice.
+func (t *TransformerWithTensors) GetParameters() []*Tensor {
+	paramsMap := make(map[*Tensor]bool) // To avoid duplicates
+	var params []*Tensor
+
+	add := func(tensor *Tensor) {
+		if tensor != nil && !paramsMap[tensor] { // Assuming all tensors returned by component GetParameters are relevant
+			params = append(params, tensor)
+			paramsMap[tensor] = true
+		}
+	}
+
+	addMultiple := func(tensors []*Tensor) {
+		for _, tensor := range tensors {
+			add(tensor)
+		}
+	}
+
 	// Embedding and output matrices
-	params["embedding"] = t.EmbeddingMatrix
-	params["output"] = t.OutputMatrix
-	
+	add(t.EmbeddingMatrix)
+	add(t.OutputMatrix)
+
 	// Encoder parameters
-	for i, layer := range t.Encoder {
-		// Self-attention
-		params[fmt.Sprintf("encoder_%d_self_query", i)] = layer.SelfAttention.QueryWeight
-		params[fmt.Sprintf("encoder_%d_self_key", i)] = layer.SelfAttention.KeyWeight
-		params[fmt.Sprintf("encoder_%d_self_value", i)] = layer.SelfAttention.ValueWeight
-		params[fmt.Sprintf("encoder_%d_self_output", i)] = layer.SelfAttention.OutputWeight
-		
-		// Layer normalization
-		params[fmt.Sprintf("encoder_%d_norm1_gamma", i)] = layer.Norm1.Gamma
-		params[fmt.Sprintf("encoder_%d_norm1_beta", i)] = layer.Norm1.Beta
-		params[fmt.Sprintf("encoder_%d_norm2_gamma", i)] = layer.Norm2.Gamma
-		params[fmt.Sprintf("encoder_%d_norm2_beta", i)] = layer.Norm2.Beta
-		
-		// Feed-forward
-		params[fmt.Sprintf("encoder_%d_ffn_w1", i)] = layer.FeedForward.W1
-		params[fmt.Sprintf("encoder_%d_ffn_b1", i)] = layer.FeedForward.B1
-		params[fmt.Sprintf("encoder_%d_ffn_w2", i)] = layer.FeedForward.W2
-		params[fmt.Sprintf("encoder_%d_ffn_b2", i)] = layer.FeedForward.B2
+	for _, layer := range t.Encoder {
+		if layer != nil { // Add nil check for layer
+			addMultiple(layer.GetParameters()) // Assumes layer.GetParameters() exists
+		}
 	}
-	
+
 	// Decoder parameters
-	for i, layer := range t.Decoder {
-		// Self-attention
-		params[fmt.Sprintf("decoder_%d_self_query", i)] = layer.SelfAttention.QueryWeight
-		params[fmt.Sprintf("decoder_%d_self_key", i)] = layer.SelfAttention.KeyWeight
-		params[fmt.Sprintf("decoder_%d_self_value", i)] = layer.SelfAttention.ValueWeight
-		params[fmt.Sprintf("decoder_%d_self_output", i)] = layer.SelfAttention.OutputWeight
-		
-		// Cross-attention
-		params[fmt.Sprintf("decoder_%d_cross_query", i)] = layer.CrossAttention.QueryWeight
-		params[fmt.Sprintf("decoder_%d_cross_key", i)] = layer.CrossAttention.KeyWeight
-		params[fmt.Sprintf("decoder_%d_cross_value", i)] = layer.CrossAttention.ValueWeight
-		params[fmt.Sprintf("decoder_%d_cross_output", i)] = layer.CrossAttention.OutputWeight
-		
-		// Layer normalization
-		params[fmt.Sprintf("decoder_%d_norm1_gamma", i)] = layer.Norm1.Gamma
-		params[fmt.Sprintf("decoder_%d_norm1_beta", i)] = layer.Norm1.Beta
-		params[fmt.Sprintf("decoder_%d_norm2_gamma", i)] = layer.Norm2.Gamma
-		params[fmt.Sprintf("decoder_%d_norm2_beta", i)] = layer.Norm2.Beta
-		params[fmt.Sprintf("decoder_%d_norm3_gamma", i)] = layer.Norm3.Gamma
-		params[fmt.Sprintf("decoder_%d_norm3_beta", i)] = layer.Norm3.Beta
-		
-		// Feed-forward
-		params[fmt.Sprintf("decoder_%d_ffn_w1", i)] = layer.FeedForward.W1
-		params[fmt.Sprintf("decoder_%d_ffn_b1", i)] = layer.FeedForward.B1
-		params[fmt.Sprintf("decoder_%d_ffn_w2", i)] = layer.FeedForward.W2
-		params[fmt.Sprintf("decoder_%d_ffn_b2", i)] = layer.FeedForward.B2
+	for _, layer := range t.Decoder {
+		if layer != nil { // Add nil check for layer
+			addMultiple(layer.GetParameters()) // Assumes layer.GetParameters() exists
+		}
 	}
-	
+
 	return params
 }
 
+// GetMoELayers returns all MoE layers in the transformer
+func (t *TransformerWithTensors) GetMoELayers() []*MoELayer { // Changed to local type
+	layers := []*MoELayer{} // Changed to local type
+	for _, encoderLayer := range t.Encoder {
+		if encoderLayer.IsMoE && encoderLayer.MoELayer != nil {
+			layers = append(layers, encoderLayer.MoELayer)
+		}
+	}
+	for _, decoderLayer := range t.Decoder {
+		if decoderLayer.IsMoE && decoderLayer.MoELayer != nil {
+			layers = append(layers, decoderLayer.MoELayer) // This should now correctly append the local MoELayer type
+		}
+	}
+	return layers
+}
+
 // ModelSerializer handles saving and loading transformer models
-type ModelSerializer struct{}
+// type ModelSerializer struct{}
 
 // NewModelSerializer creates a new model serializer
-func NewModelSerializer() *ModelSerializer {
-	return &ModelSerializer{}
-}
+// func NewModelSerializer() *ModelSerializer {
+// 	return &ModelSerializer{}
+// }
 
 // SaveTransformerWithTensors saves a transformer model to disk
-func (ms *ModelSerializer) SaveTransformerWithTensors(model *TransformerWithTensors, path string) error {
-	// In a real implementation, this would serialize the model to disk
-	// For this example, we'll just simulate successful saving
-	return nil
-}
+// func (ms *ModelSerializer) SaveTransformerWithTensors(model *TransformerWithTensors, path string) error {
+// 	// In a real implementation, this would serialize the model to disk
+// 	// For this example, we'll just simulate successful saving
+// 	return nil
+// }
 
 // LoadTransformerWithTensors loads a transformer model from disk
-func (ms *ModelSerializer) LoadTransformerWithTensors(path string) (*TransformerWithTensors, error) {
-	// In a real implementation, this would deserialize the model from disk
-	// For this example, we'll just return nil and an error
-	return nil, fmt.Errorf("not implemented")
-}
+// func (ms *ModelSerializer) LoadTransformerWithTensors(path string) (*TransformerWithTensors, error) {
+// 	// In a real implementation, this would deserialize the model from disk
+// 	// For this example, we'll just return nil and an error
+// 	return nil, fmt.Errorf("not implemented")
+// }
 
 // TrainingExample represents a single training example
-type TrainingExample struct {
-	SourceTokens []int
-	TargetTokens []int
-	Labels       []int
-}
+// type TrainingExample struct {
+// 	SourceTokens []int
+// 	TargetTokens []int
+// 	Labels       []int
+// }
 
 // NewTrainingExample creates a new training example
-func NewTrainingExample(sourceTokens, targetTokens, labels []int) *TrainingExample {
-	return &TrainingExample{
-		SourceTokens: sourceTokens,
-		TargetTokens: targetTokens,
-		Labels:       labels,
-	}
-}
+// func NewTrainingExample(sourceTokens, targetTokens, labels []int) *TrainingExample {
+// 	return &TrainingExample{
+// 		SourceTokens: sourceTokens,
+// 		TargetTokens: targetTokens,
+// 		Labels:       labels,
+// 	}
+// }
