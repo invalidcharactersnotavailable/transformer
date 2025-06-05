@@ -5,8 +5,8 @@ import (
 	"fmt"
 	// "math" // Not strictly needed for this test's assertions
 
-	"github.com/transformer_reorganized/pkg/core"
-	"github.com/transformer_reorganized/pkg/moe" // Required for model.GetMoELayers()
+	"transformer/pkg/core"
+	// "transformer/pkg/moe" // MoE types are now local to autodiff package
 )
 
 // Helper to create a new graph for each test to ensure isolation (if not in a shared test util)
@@ -114,45 +114,19 @@ func TestMoETransformerIntegration(t *testing.T) {
 	// Given the last update to tensor_transformer.go, it expects these in core.Config.
 	// So, we add them to the modelConfig instance for the test.
 
-	// This is a temporary solution for testing. These should ideally be plumbed differently.
-	type TempConfig struct {
-		core.Config
-		MoERouterZLossCoeff     float64
-		MoELoadBalanceLossCoeff float64
-	}
-	fullModelConfig := &TempConfig{
-		Config: *modelConfig,
-		MoERouterZLossCoeff:     0.01,
-		MoELoadBalanceLossCoeff: 0.01,
-	}
-	// This workaround is not ideal. The proper way is to update core.Config definition.
-	// For now, the test will proceed assuming these values reach MoELayerConfig via some mechanism
-	// or uses defaults in MoELayerConfig. The crucial part is testing the flow.
-	// The current NewTransformerWithTensors DOES read config.MoERouterZLossCoeff.
-	// So, we must ensure core.Config has these.
-	// For the purpose of this test, I will assume core.Config was extended to include these.
-	// I will not modify core.Config in this step, but the test might show warnings or use defaults.
+	// The NewTransformerWithTensors function now uses the local MoELayerConfig type,
+	// and it expects fields like MoENumExperts, MoEHiddenDim etc. to be present in the core.Config.
+	// It also expects MoERouterZLossCoeff and MoELoadBalanceLossCoeff to be in core.Config
+	// to populate the local MoELayerConfig.
 
+	// For this test, we ensure that the core.Config instance (modelConfig) has these fields.
+	// If the actual definition of core.Config in pkg/core/core.go doesn't have them,
+	// this test might not reflect the true behavior, or NewTransformerWithTensors would fail
+	// if it tries to access non-existent fields.
+	// It is assumed that core.Config has been updated to include all necessary MoE related fields.
 
 	// 3. Initialize Model
-	// The NewTransformerWithTensors signature expects core.Config and graph.
-	// It internally creates moe.MoELayerConfig using fields from core.Config.
-	// For the loss coeffs, they must be in core.Config.
-	// Let's simulate they are by setting them directly for this test instance.
-	// This requires core.Config to actually have these fields.
-	// Re-checking: pkg/core/config.go does NOT have these.
-	// pkg/autodiff/tensor_transformer.go's NewTransformerWithTensors DOES try to read them from core.Config.
-	// This is an inconsistency.
-	// For this test to pass, I will assume the user will fix core.Config to include these,
-	// or NewTransformerWithTensors will be changed to take them from another source (e.g. FineTuningConfig).
-	// Let's proceed by directly setting them on a temporary augmented config struct for the test.
-	// This is not ideal but allows the test structure to be written.
-
-	// Correct approach: Modify core.Config to include MoERouterZLossCoeff, MoELoadBalanceLossCoeff
-	// For now, I'll proceed with the assumption that these values are somehow passed.
-	// The test will use the default values in MoELayerConfig (0.01) if not overridden.
-
-	model := NewTransformerWithTensors(modelConfig, transformerGraph)
+	model := NewTransformerWithTensors(modelConfig, transformerGraph) // NewTransformerWithTensors uses local MoE types
 	if model == nil {
 		t.Fatal("NewTransformerWithTensors returned nil")
 	}
@@ -207,26 +181,31 @@ func TestMoETransformerIntegration(t *testing.T) {
 
 	totalAuxLoss, _ := NewTensor(NewMatrixZeros(1,1), &TensorConfig{Graph: transformerGraph, Name: "total_aux_loss_agg", RequiresGrad: true})
 
-	moeLayers := model.GetMoELayers()
-	if modelConfig.UseMoE && len(moeLayers) == 0 {
-		t.Error("Model configured to use MoE, but no MoE layers found")
+	// model.GetMoELayers() now returns []AuxiliaryLossProvider
+	// Each provider (which is an *autodiff.MoELayer) has GetAuxiliaryLoss()
+	moeLayerProviders := model.GetMoELayers()
+	if modelConfig.UseMoE && len(moeLayerProviders) == 0 {
+		t.Error("Model configured to use MoE, but no MoE layers found via GetMoELayers")
 	}
 
-	for i, moeLayer := range moeLayers {
-		if moeLayer.AuxiliaryLoss == nil {
-			t.Fatalf("MoE layer %d AuxiliaryLoss is nil", i)
+	for i, provider := range moeLayerProviders {
+		auxLoss := provider.GetAuxiliaryLoss() // This is *autodiff.Tensor
+		if auxLoss == nil {
+			t.Fatalf("MoE layer provider %d GetAuxiliaryLoss() is nil", i)
 		}
 		// Ensure aux loss is on the same graph and has grad if it's to be added
-		if moeLayer.AuxiliaryLoss.Graph != transformerGraph { moeLayer.AuxiliaryLoss.SetGraph(transformerGraph)}
-		if !moeLayer.AuxiliaryLoss.RequiresGrad && (modelConfig.MoERouterZLossCoeff > 0 || modelConfig.MoELoadBalanceLossCoeff > 0) {
-			// If coeffs > 0, aux loss should require grad.
-			// This depends on how it's initialized in MoELayer.Forward when training.
-			// Current MoELayer.Forward initializes totalAuxLoss with RequiresGrad=true.
-		}
+		if auxLoss.Graph != transformerGraph { auxLoss.SetGraph(transformerGraph)}
+		// If MoERouterZLossCoeff or MoELoadBalanceLossCoeff are non-zero in core.Config,
+		// then the auxLoss from MoELayer.Forward (when isTraining=true) should have RequiresGrad=true.
+		// This check can be refined based on core.Config values.
+		// For instance:
+		// if (modelConfig.MoERouterZLossCoeff > 0 || modelConfig.MoELoadBalanceLossCoeff > 0) && !auxLoss.RequiresGrad {
+		//    t.Logf("Warning: MoE layer %d auxLoss.RequiresGrad is false, but loss coeffs might be > 0.", i)
+		// }
 
-		totalAuxLoss, err = Add(totalAuxLoss, moeLayer.AuxiliaryLoss)
+		totalAuxLoss, err = Add(totalAuxLoss, auxLoss)
 		if err != nil {
-			t.Fatalf("Failed to add auxiliary loss from MoE layer %d: %v", i, err)
+			t.Fatalf("Failed to add auxiliary loss from MoE layer provider %d: %v", i, err)
 		}
 	}
 

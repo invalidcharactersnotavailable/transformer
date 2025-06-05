@@ -1,28 +1,28 @@
-package moe
+package autodiff
 
 import (
 	"testing"
 	"fmt"
-	"github.com/transformer_reorganized/pkg/autodiff"
+	// "transformer/pkg/autodiff" // No longer needed, types are in the same package
 )
 
 // Helper to create a new graph for each test to ensure isolation
-func newTestGraph() *autodiff.ComputationGraph {
-	return autodiff.NewComputationGraph()
+func newTestGraph() *ComputationGraph { // Use local ComputationGraph
+	return NewComputationGraph() // Use local NewComputationGraph
 }
 
-// Helper for a simple activation function (identity) if needed, or use autodiff.GELU
-func identityActivation(t *autodiff.Tensor) (*autodiff.Tensor, error) {
+// Helper for a simple activation function (identity) if needed, or use GELU
+func identityActivation(t *Tensor) (*Tensor, error) { // Use local Tensor
 	return t, nil
 }
 
-// --- Tests for moe.Expert ---
+// --- Tests for Expert (now in autodiff) ---
 
 func TestNewExpert(t *testing.T) {
 	graph := newTestGraph()
 	inputDim, hiddenDim, outputDim := 4, 8, 4
 
-	expert := NewExpert(inputDim, hiddenDim, outputDim, autodiff.GELU, true, graph)
+	expert := NewExpert(inputDim, hiddenDim, outputDim, GELU, true, graph) // Use local GELU and NewExpert
 
 	if expert == nil {
 		t.Fatal("NewExpert returned nil")
@@ -40,7 +40,7 @@ func TestNewExpert(t *testing.T) {
 		t.Errorf("Expert.B2 has incorrect shape or is nil. Got %v, expected (1,%d)", expert.B2.Shape(), outputDim)
 	}
 
-	for _, p := range []*autodiff.Tensor{expert.W1, expert.B1, expert.W2, expert.B2} {
+	for _, p := range []*Tensor{expert.W1, expert.B1, expert.W2, expert.B2} { // Use local Tensor
 		if p.Graph != graph {
 			t.Errorf("Parameter %s not associated with the correct graph", p.Name)
 		}
@@ -58,10 +58,10 @@ func TestExpertForward(t *testing.T) {
 	inputDim, hiddenDim, outputDim := 4, 8, 4
 	batchSize := 2
 
-	expert := NewExpert(inputDim, hiddenDim, outputDim, autodiff.GELU, true, graph)
+	expert := NewExpert(inputDim, hiddenDim, outputDim, GELU, true, graph) // Use local GELU
 
-	inputData, _ := autodiff.NewRandomMatrix(batchSize, inputDim)
-	inputTensor, _ := autodiff.NewTensor(inputData, &autodiff.TensorConfig{Graph: graph, Name: "expert_input"})
+	inputData, _ := NewRandomMatrix(batchSize, inputDim) // Use local NewRandomMatrix
+	inputTensor, _ := NewTensor(inputData, &TensorConfig{Graph: graph, Name: "expert_input"}) // Use local NewTensor and TensorConfig
 
 	output, err := expert.Forward(inputTensor)
 	if err != nil {
@@ -83,22 +83,22 @@ func TestExpertBackward(t *testing.T) {
 	inputDim, hiddenDim, outputDim := 2, 3, 2
 	batchSize := 1
 
-	expert := NewExpert(inputDim, hiddenDim, outputDim, autodiff.GELU, true, graph)
+	expert := NewExpert(inputDim, hiddenDim, outputDim, GELU, true, graph) // Use local GELU
 
-	inputData, _ := autodiff.NewRandomMatrix(batchSize, inputDim)
+	inputData, _ := NewRandomMatrix(batchSize, inputDim) // Use local NewRandomMatrix
 	// Ensure input requires grad if we want to check its grad too, though not strictly necessary for checking expert param grads
-	inputTensor, _ := autodiff.NewTensor(inputData, &autodiff.TensorConfig{Graph: graph, Name: "expert_input_bw_test", RequiresGrad: true})
+	inputTensor, _ := NewTensor(inputData, &TensorConfig{Graph: graph, Name: "expert_input_bw_test", RequiresGrad: true}) // Use local NewTensor and TensorConfig
 
 	output, errFwd := expert.Forward(inputTensor)
 	if errFwd != nil { t.Fatalf("Expert.Forward failed: %v", errFwd) }
 
 	// Create a simple scalar loss
-	loss, errLoss := autodiff.TensorMean(output, -1, false) // Mean of all elements
+	loss, errLoss := TensorMean(output, -1, false) // Use local TensorMean
 	if errLoss != nil { t.Fatalf("TensorMean for loss failed: %v", errLoss) }
 
 	// Initialize gradient for the loss tensor (usually 1.0 for scalar loss)
 	if loss.Grad == nil && loss.RequiresGrad {
-		loss.Grad, _ = autodiff.NewMatrix(loss.Shape()[0], loss.Shape()[1])
+		loss.Grad, _ = NewMatrix(loss.Shape()[0], loss.Shape()[1]) // Use local NewMatrix
 	}
 	loss.Grad.Data[0][0] = 1.0
 
@@ -125,7 +125,7 @@ func TestExpertBackward(t *testing.T) {
 	loss.Graph.Backward()
 
 
-	paramsToCheck := []*autodiff.Tensor{expert.W1, expert.B1, expert.W2, expert.B2}
+	paramsToCheck := []*Tensor{expert.W1, expert.B1, expert.W2, expert.B2} // Use local Tensor
 	for _, p := range paramsToCheck {
 		if p.Grad == nil {
 			t.Errorf("Parameter %s has nil gradient after backward pass", p.Name)
@@ -155,7 +155,7 @@ func TestExpertBackward(t *testing.T) {
 
 func TestExpertGetParameters(t *testing.T) {
 	graph := newTestGraph()
-	expert := NewExpert(4, 8, 4, autodiff.GELU, true, graph)
+	expert := NewExpert(4, 8, 4, GELU, true, graph) // Use local GELU
 	params := expert.GetParameters()
 
 	if len(params) != 4 {
@@ -198,8 +198,8 @@ func TestRouterForward(t *testing.T) {
 
 	router := NewRouter(modelDim, numExperts, true, graph)
 
-	inputData, _ := autodiff.NewRandomMatrix(batchSize, modelDim)
-	inputTensor, _ := autodiff.NewTensor(inputData, &autodiff.TensorConfig{Graph: graph, Name: "router_input"})
+	inputData, _ := NewRandomMatrix(batchSize, modelDim) // Use local NewRandomMatrix
+	inputTensor, _ := NewTensor(inputData, &TensorConfig{Graph: graph, Name: "router_input"}) // Use local NewTensor and TensorConfig
 
 	logits, err := router.Forward(inputTensor)
 	if err != nil {
@@ -223,23 +223,23 @@ func TestRouterBackward(t *testing.T) {
 
 	router := NewRouter(modelDim, numExperts, true, graph)
 
-	inputData, _ := autodiff.NewRandomMatrix(batchSize, modelDim)
-	inputTensor, _ := autodiff.NewTensor(inputData, &autodiff.TensorConfig{Graph: graph, Name: "router_input_bw_test", RequiresGrad: true})
+	inputData, _ := NewRandomMatrix(batchSize, modelDim) // Use local NewRandomMatrix
+	inputTensor, _ := NewTensor(inputData, &TensorConfig{Graph: graph, Name: "router_input_bw_test", RequiresGrad: true}) // Use local NewTensor and TensorConfig
 
 	logits, errFwd := router.Forward(inputTensor)
 	if errFwd != nil { t.Fatalf("Router.Forward failed: %v", errFwd) }
 
-	loss, errLoss := autodiff.TensorMean(logits, -1, false)
+	loss, errLoss := TensorMean(logits, -1, false) // Use local TensorMean
 	if errLoss != nil { t.Fatalf("TensorMean for loss failed: %v", errLoss) }
 
-	if loss.Grad == nil && loss.RequiresGrad { loss.Grad, _ = autodiff.NewMatrix(loss.Shape()[0], loss.Shape()[1]) }
+	if loss.Grad == nil && loss.RequiresGrad { loss.Grad, _ = NewMatrix(loss.Shape()[0], loss.Shape()[1]) } // Use local NewMatrix
 	loss.Grad.Data[0][0] = 1.0
 
 	if loss.Graph == nil && loss.RequiresGrad { loss.SetGraph(graph); graph.AddNode(loss) }
 	loss.Graph.Backward()
 
 
-	paramsToCheck := []*autodiff.Tensor{router.Weights, router.Bias}
+	paramsToCheck := []*Tensor{router.Weights, router.Bias} // Use local Tensor
 	for _, p := range paramsToCheck {
 		if p.Grad == nil {
 			t.Errorf("Parameter %s has nil gradient after backward pass", p.Name)
@@ -272,7 +272,7 @@ func TestRouterGetParameters(t *testing.T) {
 
 // Mock GetNodesForTest for ComputationGraph if it's not exported
 // This is only for testing purposes if the original method is not accessible.
-func (g *autodiff.ComputationGraph) GetNodesForTest() []*autodiff.Tensor {
+func (g *ComputationGraph) GetNodesForTest() []*Tensor { // Use local ComputationGraph and Tensor
     // This function would need to be part of the autodiff package or use reflection if nodes is private.
     // For this test file, we assume it's conceptually checkable or the graph.Backward() call is sufficient.
     // If nodes is exported: return g.nodes

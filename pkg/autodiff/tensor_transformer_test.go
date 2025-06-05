@@ -2,7 +2,7 @@ package autodiff
 
 import (
 	"testing"
-	coreconfig "github.com/transformer_reorganized/pkg/core" // Alias for core config
+	coreconfig "transformer/pkg/core" // Alias for core config
 )
 
 func TestParameterSharingReducesParameterCount(t *testing.T) {
@@ -286,8 +286,8 @@ import (
 	"math/rand"
 
 
-	coreconfig "github.com/transformer_reorganized/pkg/core"
-	"github.com/transformer_reorganized/internal/tokenizer"
+	coreconfig "transformer/pkg/core"
+	"transformer/internal/tokenizer"
 )
 
 func TestParameterSharingReducesParameterCount(t *testing.T) {

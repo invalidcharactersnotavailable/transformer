@@ -2,9 +2,9 @@
 package core
 
 // Import necessary packages
-import (
-	"github.com/transformer_reorganized/utils"
-)
+// import (
+//	"transformer/internal/utils" // Temporarily removed to break import cycle
+// )
 
 // Re-export key types and functions
 type Config struct {

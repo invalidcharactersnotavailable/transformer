@@ -5,8 +5,8 @@ import (
 	"math"
 	"math/rand"
 
-	"github.com/transformer_reorganized/pkg/core"
-	"github.com/transformer_reorganized/pkg/moe"
+	"transformer/pkg/core"
+	// "transformer/pkg/moe" // No longer needed as MoE types are local or in autodiff
 )
 
 // TransformerWithTensors structure
@@ -30,7 +30,7 @@ func NewTransformerWithTensors(config *core.Config, graph *ComputationGraph) *Tr
 	// Populate MoELayerConfig from core.Config
 	// Note: RouterZLossCoeff and LoadBalanceLossCoeff are now part of MoELayerConfig itself.
 	// They will be passed from TensorFineTuningConfig to core.Config, then to MoELayerConfig.
-	moeLayerConf := moe.MoELayerConfig{
+	moeLayerConf := MoELayerConfig{ // Use local MoELayerConfig
 		ModelDim:             config.EmbeddingDim,
 		NumExperts:           config.MoENumExperts,
 		HiddenDim:            config.MoEHiddenDim,
@@ -81,9 +81,9 @@ func NewTransformerWithTensors(config *core.Config, graph *ComputationGraph) *Tr
 type EncoderLayerWithTensors struct {
 	SelfAttention *MultiHeadAttentionWithTensors; FeedForward *FeedForwardWithTensors
 	Norm1 *LayerNormWithTensors; Norm2 *LayerNormWithTensors; Dropout *DropoutTensor
-	MoELayer *moe.MoELayer; IsMoE bool; Graph *ComputationGraph
+	MoELayer *MoELayer; IsMoE bool; Graph *ComputationGraph // Use local MoELayer
 }
-func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig moe.MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *EncoderLayerWithTensors {
+func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *EncoderLayerWithTensors { // Use local MoELayerConfig
 	el := &EncoderLayerWithTensors{
 		SelfAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim, config.NumHeads, dropoutRate, requiresGrad, graph),
 		Norm1:         NewLayerNormWithTensors(config.EmbeddingDim, requiresGrad, graph),
@@ -108,7 +108,7 @@ func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE
 			// Default MoE expert activation can be same as standard FFN or specific
 			moeConfig.Activation = ffActivationFunc // Or a specific MoE default like GELU
 		}
-		el.MoELayer = moe.NewMoELayer(moeConfig, requiresGrad, graph); el.FeedForward = nil
+		el.MoELayer = NewMoELayer(moeConfig, requiresGrad, graph); el.FeedForward = nil // Use local NewMoELayer
 	} else {
 		el.FeedForward = NewFeedForwardWithTensors(config.EmbeddingDim, config.FFNHiddenDim, dropoutRate, ffActivationFunc, requiresGrad, graph); el.MoELayer = nil
 	}
@@ -119,9 +119,9 @@ func NewEncoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE
 type DecoderLayerWithTensors struct {
 	SelfAttention *MultiHeadAttentionWithTensors; CrossAttention *MultiHeadAttentionWithTensors
 	FeedForward *FeedForwardWithTensors; Norm1 *LayerNormWithTensors; Norm2 *LayerNormWithTensors; Norm3 *LayerNormWithTensors
-	Dropout *DropoutTensor; MoELayer *moe.MoELayer; IsMoE bool; Graph *ComputationGraph
+	Dropout *DropoutTensor; MoELayer *MoELayer; IsMoE bool; Graph *ComputationGraph // Use local MoELayer
 }
-func NewDecoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig moe.MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *DecoderLayerWithTensors {
+func NewDecoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE bool, moeConfig MoELayerConfig, requiresGrad bool, graph *ComputationGraph) *DecoderLayerWithTensors { // Use local MoELayerConfig
 	dl := &DecoderLayerWithTensors{
 		SelfAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim,config.NumHeads,dropoutRate,requiresGrad,graph), CrossAttention: NewMultiHeadAttentionWithTensors(config.EmbeddingDim,config.NumHeads,dropoutRate,requiresGrad,graph),
 		Norm1: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph), Norm2: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph), Norm3: NewLayerNormWithTensors(config.EmbeddingDim,requiresGrad,graph),
@@ -140,7 +140,7 @@ func NewDecoderLayerWithTensors(config *core.Config, dropoutRate float64, useMoE
 	if useMoE {
 		moeConfig.ModelDim = config.EmbeddingDim
 		if moeConfig.Activation == nil { moeConfig.Activation = ffActivationFunc }
-		dl.MoELayer = moe.NewMoELayer(moeConfig, requiresGrad, graph); dl.FeedForward = nil
+		dl.MoELayer = NewMoELayer(moeConfig, requiresGrad, graph); dl.FeedForward = nil // Use local NewMoELayer
 	} else {
 		dl.FeedForward = NewFeedForwardWithTensors(config.EmbeddingDim,config.FFNHiddenDim,dropoutRate,ffActivationFunc,requiresGrad,graph); dl.MoELayer = nil
 	}
@@ -177,6 +177,11 @@ func NewFeedForwardWithTensors(inD,hidD int,dropRate float64,act func(*Tensor)(*
 // LayerNorm structure and constructor (assuming unchanged from previous correct version)
 type LayerNormWithTensors struct { Dim int; Gamma *Tensor; Beta *Tensor; Eps float64; Graph *ComputationGraph }
 func NewLayerNormWithTensors(dim int,reqGrad bool,g *ComputationGraph) *LayerNormWithTensors {
+
+// AuxiliaryLossProvider defines an interface for components that provide an auxiliary loss.
+type AuxiliaryLossProvider interface {
+	GetAuxiliaryLoss() *Tensor
+}
 	sfx:=fmt.Sprintf("_ln_d%d",dim);tcG:=&TensorConfig{RequiresGrad:reqGrad,Name:"gamma"+sfx,Graph:g};tcB:=&TensorConfig{RequiresGrad:reqGrad,Name:"beta"+sfx,Graph:g}
 	gD,_:=NewMatrix(1,dim);for j:=0;j<dim;j++{gD.Data[0][j]=1.0};gam,_:=NewTensor(gD,tcG)
 	bD,_:=NewMatrix(1,dim);bet,_:=NewTensor(bD,tcB)
@@ -253,9 +258,20 @@ func (t *TransformerWithTensors) Forward(srcIndicesTensor, tgtIndicesTensor *Ten
 	return logits, nil
 }
 
-// GetMoELayers and GetParameters methods (assuming unchanged)
-func (t *TransformerWithTensors) GetMoELayers() []*moe.MoELayer { /* ... */
-	ls := []*moe.MoELayer{}; for _, l := range t.Encoder { if l.IsMoE && l.MoELayer != nil { ls = append(ls, l.MoELayer) } }; for _, l := range t.Decoder { if l.IsMoE && l.MoELayer != nil { ls = append(ls, l.MoELayer) } }; return ls
+// GetMoELayers and GetParameters methods
+func (t *TransformerWithTensors) GetMoELayers() []AuxiliaryLossProvider { // Returns slice of interfaces
+	providers := []AuxiliaryLossProvider{}
+	for _, l := range t.Encoder {
+		if l.IsMoE && l.MoELayer != nil { // l.MoELayer is now *autodiff.MoELayer
+			providers = append(providers, l.MoELayer) // *autodiff.MoELayer implements AuxiliaryLossProvider
+		}
+	}
+	for _, l := range t.Decoder {
+		if l.IsMoE && l.MoELayer != nil { // l.MoELayer is now *autodiff.MoELayer
+			providers = append(providers, l.MoELayer) // *autodiff.MoELayer implements AuxiliaryLossProvider
+		}
+	}
+	return providers
 }
 func (t *TransformerWithTensors) GetParameters() []*Tensor { /* ... */
 	pm:=make(map[*Tensor]bool);ap:=[]*Tensor{};addP:=func(p*Tensor){if p!=nil&&p.RequiresGrad&&!pm[p]{ap=append(ap,p);pm[p]=true}};addPS:=func(ps[]*Tensor){for _,p:=range ps{addP(p)}}

@@ -1,9 +1,13 @@
 package transformer
 
+import (
+	"transformer/pkg/autodiff"
+)
+
 // Batch represents a batch of sequences for efficient processing
 type Batch struct {
-	Sequences      *Matrix
-	AttentionMask  *AttentionMask
+	Sequences      *autodiff.Matrix
+	AttentionMask  *AttentionMask // Assuming AttentionMask is local or also needs qualification
 	SequenceLengths []int
 	BatchSize      int
 }
@@ -13,7 +17,7 @@ func NewBatch(sequences [][]int, maxLen int) *Batch {
 	batchSize := len(sequences)
 	
 	// Create matrix to hold sequences
-	batchMatrix := NewMatrix(batchSize, maxLen)
+	batchMatrix := autodiff.MustNewMatrix(batchSize, maxLen)
 	
 	// Track actual sequence lengths
 	sequenceLengths := make([]int, batchSize)
@@ -38,8 +42,8 @@ func NewBatch(sequences [][]int, maxLen int) *Batch {
 }
 
 // GetEmbeddings converts a batch of token IDs to embeddings
-func (b *Batch) GetEmbeddings(embeddings *Matrix) *Matrix {
-	result := NewMatrix(b.BatchSize, embeddings.Cols)
+func (b *Batch) GetEmbeddings(embeddings *autodiff.Matrix) *autodiff.Matrix {
+	result := autodiff.MustNewMatrix(b.BatchSize, embeddings.Cols)
 	
 	for i := 0; i < b.BatchSize; i++ {
 		for j := 0; j < b.SequenceLengths[i]; j++ {

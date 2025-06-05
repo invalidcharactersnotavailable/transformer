@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/transformer_reorganized/internal/tokenizer"
-	"github.com/transformer_reorganized/pkg/moe"
+	"transformer/internal/tokenizer"
+	// "transformer/pkg/moe" // MoE types are now local to autodiff package
 )
 
 // TensorFineTuningConfig contains configuration for tensor-based fine-tuning
@@ -207,11 +207,12 @@ func (ft *GradientFineTuner) TrainStep(batchExamples []*TensorTrainingExample) (
 	totalMoEAuxLoss, _ := autodiff.NewTensor(autodiff.NewMatrixZeros(1,1), totalMoEAuxLossCfg)
 
 
-	moeLayers := ft.Model.GetMoELayers()
-	if len(moeLayers) > 0 {
-		for _, moeLayer := range moeLayers {
-			if moeLayer.AuxiliaryLoss != nil && moeLayer.AuxiliaryLoss.RequiresGrad { // Ensure aux loss itself can propagate
-				totalMoEAuxLoss, err = autodiff.Add(totalMoEAuxLoss, moeLayer.AuxiliaryLoss)
+	moeLayerProviders := ft.Model.GetMoELayers()
+	if len(moeLayerProviders) > 0 {
+		for _, provider := range moeLayerProviders {
+			auxLoss := provider.GetAuxiliaryLoss()
+			if auxLoss != nil && auxLoss.RequiresGrad { // Ensure aux loss itself can propagate
+				totalMoEAuxLoss, err = autodiff.Add(totalMoEAuxLoss, auxLoss)
 				if err != nil { return 0, fmt.Errorf("add MoE aux loss: %w", err) }
 			}
 		}

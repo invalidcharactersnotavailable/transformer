@@ -1,13 +1,17 @@
 package transformer
 
+import (
+	"transformer/pkg/autodiff"
+)
+
 // AttentionMask represents a mask for controlling attention flow
 type AttentionMask struct {
-	Mask *Matrix
+	Mask *autodiff.Matrix
 }
 
 // NewPaddingMask creates a mask for padding tokens
 func NewPaddingMask(seqLen int, validLengths []int) *AttentionMask {
-	mask := NewMatrix(len(validLengths), seqLen)
+	mask := autodiff.MustNewMatrix(len(validLengths), seqLen)
 	
 	// Set 1.0 for valid positions, 0.0 for padding
 	for i, validLen := range validLengths {
@@ -25,7 +29,7 @@ func NewPaddingMask(seqLen int, validLengths []int) *AttentionMask {
 
 // NewCausalMask creates a causal (future-blinding) mask for decoder
 func NewCausalMask(seqLen int) *AttentionMask {
-	mask := NewMatrix(seqLen, seqLen)
+	mask := autodiff.MustNewMatrix(seqLen, seqLen)
 	
 	// Set 1.0 for positions that can be attended to (lower triangle)
 	for i := 0; i < seqLen; i++ {
@@ -42,8 +46,8 @@ func NewCausalMask(seqLen int) *AttentionMask {
 }
 
 // ApplyMask applies the attention mask to attention scores
-func (am *AttentionMask) ApplyMask(scores *Matrix) *Matrix {
-	result := NewMatrix(scores.Rows, scores.Cols)
+func (am *AttentionMask) ApplyMask(scores *autodiff.Matrix) *autodiff.Matrix {
+	result := autodiff.MustNewMatrix(scores.Rows, scores.Cols)
 	
 	for i := 0; i < scores.Rows; i++ {
 		for j := 0; j < scores.Cols; j++ {

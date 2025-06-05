@@ -2,12 +2,13 @@ package transformer
 
 import (
 	"math/rand"
+	"transformer/pkg/autodiff"
 )
 
 // Dropout represents a dropout layer for regularization
 type Dropout struct {
 	Rate float64
-	Mask *Matrix
+	Mask *autodiff.Matrix
 }
 
 // NewDropout creates a new dropout layer with specified dropout rate
@@ -18,13 +19,13 @@ func NewDropout(rate float64) *Dropout {
 }
 
 // Forward applies dropout to the input during training
-func (d *Dropout) Forward(input *Matrix, isTraining bool) *Matrix {
+func (d *Dropout) Forward(input *autodiff.Matrix, isTraining bool) *autodiff.Matrix {
 	if !isTraining || d.Rate <= 0.0 {
 		return input
 	}
 	
 	// Create dropout mask
-	d.Mask = NewMatrix(input.Rows, input.Cols)
+	d.Mask = autodiff.MustNewMatrix(input.Rows, input.Cols)
 	
 	// Scale factor to maintain expected value
 	scale := 1.0 / (1.0 - d.Rate)
@@ -41,7 +42,7 @@ func (d *Dropout) Forward(input *Matrix, isTraining bool) *Matrix {
 	}
 	
 	// Apply mask
-	result := NewMatrix(input.Rows, input.Cols)
+	result := autodiff.MustNewMatrix(input.Rows, input.Cols)
 	for i := 0; i < input.Rows; i++ {
 		for j := 0; j < input.Cols; j++ {
 			result.Data[i][j] = input.Data[i][j] * d.Mask.Data[i][j]

@@ -2,20 +2,21 @@ package transformer
 
 import (
 	"math"
+	"transformer/pkg/autodiff"
 )
 
 // LayerNorm represents a layer normalization component
 type LayerNorm struct {
 	Dim      int
 	Epsilon  float64
-	Gamma    *Matrix
-	Beta     *Matrix
+	Gamma    *autodiff.Matrix
+	Beta     *autodiff.Matrix
 }
 
 // NewLayerNorm creates a new layer normalization component
 func NewLayerNorm(dim int) *LayerNorm {
-	gamma := NewMatrix(1, dim)
-	beta := NewMatrix(1, dim)
+	gamma := autodiff.MustNewMatrix(1, dim)
+	beta := autodiff.MustNewMatrix(1, dim)
 	
 	// Initialize gamma to ones and beta to zeros
 	for i := 0; i < dim; i++ {
@@ -32,8 +33,8 @@ func NewLayerNorm(dim int) *LayerNorm {
 }
 
 // Forward applies layer normalization to the input
-func (ln *LayerNorm) Forward(input *Matrix) *Matrix {
-	output := NewMatrix(input.Rows, input.Cols)
+func (ln *LayerNorm) Forward(input *autodiff.Matrix) *autodiff.Matrix {
+	output := autodiff.MustNewMatrix(input.Rows, input.Cols)
 	
 	for i := 0; i < input.Rows; i++ {
 		// Calculate mean

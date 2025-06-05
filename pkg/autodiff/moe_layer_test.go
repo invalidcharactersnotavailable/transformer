@@ -1,21 +1,21 @@
-package moe
+package autodiff
 
 import (
 	"testing"
 	"fmt"
 	// "math" // Not strictly needed for these tests yet
 
-	"github.com/transformer_reorganized/pkg/autodiff"
+	// "transformer/pkg/autodiff" // No longer needed
 )
 
 // Helper to create a new graph for each test to ensure isolation
-func newTestGraphMoELayer() *autodiff.ComputationGraph {
-	return autodiff.NewComputationGraph()
+func newTestGraphMoELayer() *ComputationGraph { // Use local ComputationGraph
+	return NewComputationGraph() // Use local NewComputationGraph
 }
 
 // Helper to create a default MoELayerConfig for tests
-func defaultTestMoELayerConfig(graph *autodiff.ComputationGraph) MoELayerConfig {
-	return MoELayerConfig{
+func defaultTestMoELayerConfig(graph *ComputationGraph) MoELayerConfig { // Use local MoELayerConfig and ComputationGraph
+	return MoELayerConfig{ // Use local MoELayerConfig
 		ModelDim:             4,
 		NumExperts:           2,
 		HiddenDim:            8, // Expert FFN hidden dimension
@@ -24,18 +24,18 @@ func defaultTestMoELayerConfig(graph *autodiff.ComputationGraph) MoELayerConfig 
 		NoisyRouting:         false, // Keep false for simplicity in basic tests
 		RouterZLossCoeff:     0.01,
 		LoadBalanceLossCoeff: 0.01,
-		Activation:           autodiff.GELU,
+		Activation:           GELU, // Use local GELU
 	}
 }
 
-// --- Tests for moe.MoELayer ---
+// --- Tests for MoELayer (now in autodiff) ---
 
 func TestNewMoELayer(t *testing.T) {
 	graph := newTestGraphMoELayer()
 	config := defaultTestMoELayerConfig(graph)
 	config.NumExperts = 3
 
-	layer := NewMoELayer(config, true, graph)
+	layer := NewMoELayer(config, true, graph) // Use local NewMoELayer
 
 	if layer == nil {
 		t.Fatal("NewMoELayer returned nil")
@@ -71,11 +71,11 @@ func TestMoELayerForward_TopK1(t *testing.T) {
 	config := defaultTestMoELayerConfig(graph) // TopK is 1 by default
 	config.NumExperts = 2
 
-	layer := NewMoELayer(config, true, graph)
+	layer := NewMoELayer(config, true, graph) // Use local NewMoELayer
 
 	batchSize := 3 // e.g., 3 tokens
-	inputData, _ := autodiff.NewRandomMatrix(batchSize, config.ModelDim)
-	inputTensor, _ := autodiff.NewTensor(inputData, &autodiff.TensorConfig{Graph: graph, Name: "moe_layer_input"})
+	inputData, _ := NewRandomMatrix(batchSize, config.ModelDim) // Use local NewRandomMatrix
+	inputTensor, _ := NewTensor(inputData, &TensorConfig{Graph: graph, Name: "moe_layer_input"}) // Use local NewTensor and TensorConfig
 
 	output, err := layer.Forward(inputTensor, true) // isTraining = true
 
@@ -110,11 +110,11 @@ func TestMoELayerForward_TopK2(t *testing.T) {
 	config.TopK = 2 // Test with TopK = 2
 	config.NumExperts = 3 // Need more experts than TopK
 
-	layer := NewMoELayer(config, true, graph)
+	layer := NewMoELayer(config, true, graph) // Use local NewMoELayer
 
 	batchSize := 3
-	inputData, _ := autodiff.NewRandomMatrix(batchSize, config.ModelDim)
-	inputTensor, _ := autodiff.NewTensor(inputData, &autodiff.TensorConfig{Graph: graph, Name: "moe_layer_input_topk2"})
+	inputData, _ := NewRandomMatrix(batchSize, config.ModelDim) // Use local NewRandomMatrix
+	inputTensor, _ := NewTensor(inputData, &TensorConfig{Graph: graph, Name: "moe_layer_input_topk2"}) // Use local NewTensor and TensorConfig
 
 	output, err := layer.Forward(inputTensor, true)
 
@@ -148,22 +148,22 @@ func TestMoELayerBackward_TopK1(t *testing.T) {
 	config := defaultTestMoELayerConfig(graph) // TopK=1
 	config.NumExperts = 2
 
-	layer := NewMoELayer(config, true, graph) // requiresGrad = true
+	layer := NewMoELayer(config, true, graph) // requiresGrad = true; Use local NewMoELayer
 
 	batchSize := 1
-	inputData, _ := autodiff.NewRandomMatrix(batchSize, config.ModelDim)
-	inputTensor, _ := autodiff.NewTensor(inputData, &autodiff.TensorConfig{Graph: graph, Name: "moe_layer_input_bw", RequiresGrad: true})
+	inputData, _ := NewRandomMatrix(batchSize, config.ModelDim) // Use local NewRandomMatrix
+	inputTensor, _ := NewTensor(inputData, &TensorConfig{Graph: graph, Name: "moe_layer_input_bw", RequiresGrad: true}) // Use local NewTensor and TensorConfig
 
 	output, errFwd := layer.Forward(inputTensor, true)
 	if errFwd != nil { t.Fatalf("MoELayer.Forward (TopK=1) for backward test failed: %v", errFwd) }
 
-	taskLoss, errLoss := autodiff.TensorMean(output, -1, false) // Mean of all elements
+	taskLoss, errLoss := TensorMean(output, -1, false) // Use local TensorMean
 	if errLoss != nil { t.Fatalf("TensorMean for taskLoss failed: %v", errLoss) }
 
-	totalLoss, errAdd := autodiff.Add(taskLoss, layer.AuxiliaryLoss)
+	totalLoss, errAdd := Add(taskLoss, layer.AuxiliaryLoss) // Use local Add
 	if errAdd != nil { t.Fatalf("Adding task and auxiliary loss failed: %v", errAdd) }
 
-	if totalLoss.Grad == nil && totalLoss.RequiresGrad { totalLoss.Grad, _ = autodiff.NewMatrix(1,1) }
+	if totalLoss.Grad == nil && totalLoss.RequiresGrad { totalLoss.Grad, _ = NewMatrix(1,1) } // Use local NewMatrix
 	totalLoss.Grad.Data[0][0] = 1.0
 
 	// Perform backward pass
@@ -195,7 +195,7 @@ func TestMoELayerGetParameters(t *testing.T) {
 	graph := newTestGraphMoELayer()
 	config := defaultTestMoELayerConfig(graph)
 	config.NumExperts = 2
-	layer := NewMoELayer(config, true, graph)
+	layer := NewMoELayer(config, true, graph) // Use local NewMoELayer
 
 	params := layer.GetParameters()
 	expectedNumParams := len(layer.Router.GetParameters()) + config.NumExperts * len(layer.Experts[0].GetParameters())
@@ -216,11 +216,11 @@ func TestMoELayerGetParameters(t *testing.T) {
 func TestMoELayerForward_IsTrainingFalse(t *testing.T) {
 	graph := newTestGraphMoELayer()
 	config := defaultTestMoELayerConfig(graph)
-	layer := NewMoELayer(config, false, graph) // requiresGrad = false for parameters
+	layer := NewMoELayer(config, false, graph) // requiresGrad = false for parameters; Use local NewMoELayer
 
 	batchSize := 3
-	inputData, _ := autodiff.NewRandomMatrix(batchSize, config.ModelDim)
-	inputTensor, _ := autodiff.NewTensor(inputData, &autodiff.TensorConfig{Graph: graph, Name: "moe_input_eval"})
+	inputData, _ := NewRandomMatrix(batchSize, config.ModelDim) // Use local NewRandomMatrix
+	inputTensor, _ := NewTensor(inputData, &TensorConfig{Graph: graph, Name: "moe_input_eval"}) // Use local NewTensor and TensorConfig
 
 	_, err := layer.Forward(inputTensor, false) // isTraining = false
 	if err != nil {
